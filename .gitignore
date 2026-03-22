@@ -1,0 +1,23 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Sensitive data
+.env
+
+# VS Code settings
+.vscode/
+
+# Database files (if using local sqlite for dev)
+*.db
+*.sqlite3
+
+# OS generated files
+.DS_Store
