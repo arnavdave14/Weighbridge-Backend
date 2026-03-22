@@ -1,8 +1,13 @@
-fastapi
+fastapi[all]
 uvicorn[standard]
-pydantic
-python-multipart
-sqlalchemy
+pydantic[email]
+pydantic-settings
+sqlalchemy[asyncio]
+asyncpg
 psycopg2-binary
 alembic
 python-dotenv
+python-multipart
+jinja2
+passlib[bcrypt]
+python-jose[cryptography]
