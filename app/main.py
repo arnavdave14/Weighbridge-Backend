@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import receipts, auth, bhel, sync
+from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
 from app.database.base import Base
@@ -33,6 +33,12 @@ app.include_router(auth.router)
 app.include_router(sync.router)
 app.include_router(receipts.router)
 app.include_router(bhel.router, tags=["BHEL Integration"])
+
+# Admin Routes
+app.include_router(admin_auth.router)
+app.include_router(admin_apps.router)
+app.include_router(activation.router)
+app.include_router(notifications.router)
 
 
 @app.on_event("startup")
@@ -108,9 +114,12 @@ async def startup():
     # Optionally create tables for Remote PostgreSQL if connected/reachable
     if remote_engine:
         try:
+            from app.database.admin_base import AdminBase
+            import app.models.admin_models
             print(f"Executing create_all() on Remote engine: {settings.postgres_url}")
             async with remote_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(AdminBase.metadata.create_all)
             print("Successfully initialized Remote Database tables.")
 
             # --- [POSTGRESQL SCHEMA VERIFICATION] ---
