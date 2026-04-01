@@ -23,6 +23,7 @@ class MachineBase(BaseModel):
     machine_id: str
     name: Optional[str] = None
     location: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
 
 class MachineCreate(MachineBase):
     pass
@@ -43,6 +44,11 @@ class ReceiptBase(BaseModel):
     tare_weight: float
     rate: Optional[float] = None
     custom_data: Dict[str, Any]
+    image_paths: Optional[List[str]] = []
+    # Flutter sends images as Base64 strings. Backend decodes → raw bytes → SQLite BLOB.
+    # Base64 strings are NEVER stored in the database directly.
+    images_base64: Optional[List[str]] = []
+
 
 class ReceiptCreate(ReceiptBase):
     pass
@@ -50,6 +56,7 @@ class ReceiptCreate(ReceiptBase):
 class ReceiptSync(BaseModel):
     machine_id: str
     receipts: List[ReceiptCreate]
+    settings: Optional[Dict[str, Any]] = None
 
 class ReceiptResponse(ReceiptBase):
     id: int

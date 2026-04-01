@@ -1,114 +1,173 @@
-import os
 import requests
 import logging
 import asyncio
 from typing import Dict, Any, Optional
-from datetime import datetime
-from dotenv import load_dotenv
-from sqlalchemy.future import select
-from app.db.session import async_session
-from app.models.models import Receipt
-
-load_dotenv()
+from app.config.settings import settings
 
 # Logging Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("whatsapp_service")
 
-GUPSHUP_API_KEY = os.getenv("GUPSHUP_API_KEY")
-GUPSHUP_SOURCE = os.getenv("GUPSHUP_SOURCE")
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+# Digitalsms API Configuration from settings
+DIGITALSMS_API_KEY = settings.DIGITALSMS_API_KEY
+DIGITALSMS_ENDPOINT = "https://api.digitalsms.net/wapp/api/send"
+DIGITALSMS_BASE = "https://api.digitalsms.net"
+DIGITALSMS_PORTAL_USER = settings.DIGITALSMS_PORTAL_USER
+DIGITALSMS_PORTAL_PASS = settings.DIGITALSMS_PORTAL_PASS
+BASE_URL = "http://localhost:8000" # fallback if needed, or add to settings
 
-async def send_whatsapp_message(
-    receipt_id: int, 
+
+# Shared session object (reused across requests to maintain JSESSIONID)
+_digitalsms_session: Optional[requests.Session] = None
+
+def _get_digitalsms_session() -> requests.Session:
+    """Return or create a requests.Session for Digitalsms portal."""
+    global _digitalsms_session
+    if _digitalsms_session is None:
+        _digitalsms_session = requests.Session()
+    return _digitalsms_session
+
+def _login_digitalsms() -> bool:
+    """Login to Digitalsms portal to get a JSESSIONID cookie."""
+    if not DIGITALSMS_PORTAL_USER or not DIGITALSMS_PORTAL_PASS:
+        logger.error("Digitalsms portal credentials not set in .env (DIGITALSMS_PORTAL_USER / DIGITALSMS_PORTAL_PASS)")
+        return False
+    try:
+        session = _get_digitalsms_session()
+        login_data = {
+            "username": DIGITALSMS_PORTAL_USER,
+            "password": DIGITALSMS_PORTAL_PASS,
+        }
+        resp = session.post(
+            f"{DIGITALSMS_BASE}/login",
+            data=login_data,
+            timeout=15,
+            allow_redirects=False
+        )
+        if "JSESSIONID" in session.cookies:
+            logger.info(f"Digitalsms login successful.")
+            return True
+        else:
+            logger.error(f"Digitalsms login failed. Response: {resp.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Digitalsms login exception: {e}")
+        return False
+
+async def send_whatsapp(
     phone: str, 
-    vehicle: str, 
-    weight: float, 
-    token: str
+    receipt_id: int = 0,
+    message: Optional[str] = None,
+    pdf_content: Optional[bytes] = None,
+    filename: Optional[str] = None,
+    **kwargs
 ) -> Dict[str, Any]:
     """
-    Upgraded WhatsApp notification service with retries, status tracking, and logging.
+    Unified WhatsApp sending function for Digitalsms API.
+    Pure communication layer — NO database logic.
     """
-    
-    # Validation: Phone must not be empty and must include country code (e.g., 91)
     if not phone:
-        logger.warning(f"[RT-{receipt_id}] Skipping send: Mobile number is empty.")
-        await _update_receipt_status(receipt_id, "failed")
-        return {"status": "skipped", "reason": "Empty phone"}
+        logger.warning(f"[RT-{receipt_id}] Skipping WA: Mobile number is empty.")
+        return {"status": "skipped", "message": "Phone number is empty"}
 
     clean_phone = "".join(filter(str.isdigit, phone))
-    
-    # Requirement: Must start with country code (industry standard e.g., 91)
-    # We check if length is sufficient and it starts with 91 (or other specified country code)
-    if not (clean_phone.startswith("91") and len(clean_phone) >= 12):
-        logger.warning(f"[RT-{receipt_id}] Invalid phone format: {phone}. Missing or incorrect country code (91).")
-        await _update_receipt_status(receipt_id, "failed")
-        return {"status": "failed", "reason": "Invalid phone format (must start with 91)"}
+    if not clean_phone.startswith("91") and len(clean_phone) == 10:
+        clean_phone = "91" + clean_phone
 
-    message = (
-        f"🚛 Vehicle: {vehicle or 'N/A'}\n"
-        f"⚖️ Net Weight: {weight:.2f} kg\n\n"
-        f"👉 View Bill:\n"
-        f"{BASE_URL}/r/{token}"
-    )
-
-    url = "https://api.gupshup.io/wa/api/v1/msg"
-    headers = {
-        "Cache-Control": "no-cache",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "apikey": GUPSHUP_API_KEY,
-    }
-    payload = {
-        "channel": "whatsapp",
-        "source": GUPSHUP_SOURCE,
-        "destination": clean_phone,
-        "message": message,
-        "src.name": GUPSHUP_SOURCE,
+    params = {
+        "apikey": DIGITALSMS_API_KEY,
+        "mobile": clean_phone,
+        "msg": message or (f"Receipt {filename}" if filename else "Weighbridge Receipt"),
     }
 
-    # Retry mechanism: 3 attempts with 2s delay
+    if pdf_content and len(pdf_content) > 2 * 1024 * 1024:
+        logger.error(f"[RT-{receipt_id}] PDF size too large: {len(pdf_content)} bytes (max 2MB)")
+        return {"status": "failed", "message": "PDF size exceeds 2MB limit"}
+
     max_retries = 3
     retry_delay = 2
     
-    logger.info(f"[RT-{receipt_id}] Starting WhatsApp process for {clean_phone} (Token: {token})")
-
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"[RT-{receipt_id}] Attempt {attempt} for {clean_phone}")
-            # Running sync requests in a thread to keep async friendly
-            response = await asyncio.to_thread(
-                requests.post, url, headers=headers, data=payload, timeout=10
-            )
-            
+            if pdf_content:
+                import time
+                base_fname = filename or f"Receipt_{receipt_id}.pdf"
+                name_part, ext_part = (base_fname.rsplit(".", 1) if "." in base_fname else (base_fname, "pdf"))
+                fname = f"{name_part}_{int(time.time())}.{ext_part}"
+                
+                logged_in = await asyncio.to_thread(_login_digitalsms)
+                if not logged_in:
+                    continue
+                
+                session = _get_digitalsms_session()
+                upload_resp = await asyncio.to_thread(
+                    session.post,
+                    f"{DIGITALSMS_BASE}/wapp/upload/media",
+                    files={"file": (fname, pdf_content, "application/pdf")},
+                    timeout=30
+                )
+                
+                if upload_resp.status_code != 200 or not upload_resp.text.strip().startswith("uploads/"):
+                    _digitalsms_session = None
+                    continue
+                
+                uploaded_path = upload_resp.text.strip()
+                campaign_data = {
+                    "campname": f"Receipt_{receipt_id}_{fname}",
+                    "mobile": clean_phone,
+                    "msg": message or (f"Receipt {filename}" if filename else "Weighbridge Receipt"),
+                    "pdf": uploaded_path,
+                }
+                
+                response = await asyncio.to_thread(
+                    session.post,
+                    f"{DIGITALSMS_BASE}/wapp/campaign/save",
+                    data=campaign_data,
+                    timeout=15
+                )
+            else:
+                response = await asyncio.to_thread(
+                    requests.get,
+                    DIGITALSMS_ENDPOINT,
+                    params=params,
+                    timeout=15
+                )
+
             if response.status_code == 200:
-                logger.info(f"[RT-{receipt_id}] ✅ Success on attempt {attempt}")
-                await _update_receipt_status(receipt_id, "sent")
-                return response.json()
+                logger.info(f"[RT-{receipt_id}] ✅ WhatsApp sent successfully!")
+                return {"status": "success", "response": response.text}
             
-            logger.error(f"[RT-{receipt_id}] Attempt {attempt} failed: HTTP {response.status_code}")
+            logger.error(f"[RT-{receipt_id}] WhatsApp Attempt {attempt} failed: {response.status_code}")
         except Exception as e:
-            logger.error(f"[RT-{receipt_id}] Attempt {attempt} error: {str(e)}")
+            logger.error(f"[RT-{receipt_id}] WhatsApp Error: {str(e)}")
         
         if attempt < max_retries:
             await asyncio.sleep(retry_delay)
 
-    # Final Failure
-    logger.critical(f"[RT-{receipt_id}] ❌ All attempts failed for {clean_phone}")
-    await _update_receipt_status(receipt_id, "failed")
-    return {"status": "failed", "reason": "Max retries reached or connection error"}
+    return {"status": "failed", "message": "Failed after retries"}
 
-async def _update_receipt_status(receipt_id: int, status: str):
-    """
-    Internal helper to update the database status using a fresh async session.
-    """
-    try:
-        async with async_session() as session:
-            stmt = select(Receipt).where(Receipt.id == receipt_id)
-            result = await session.execute(stmt)
-            receipt = result.scalar_one_or_none()
-            if receipt:
-                receipt.whatsapp_status = status
-                await session.commit()
-                logger.debug(f"[RT-{receipt_id}] Database status updated to: {status}")
-    except Exception as db_err:
-        logger.error(f"Failed to update database status for Receipt {receipt_id}: {db_err}")
+async def send_whatsapp_message(receipt_id: int, phone: str, **kwargs) -> Dict[str, Any]:
+    msg = kwargs.get('message')
+    if not msg:
+        slip_no = kwargs.get('slip_no', 'N/A')
+        vehicle = kwargs.get('vehicle', 'N/A')
+        gross = kwargs.get('gross_weight', 0.0)
+        tare = kwargs.get('tare_weight', 0.0)
+        net = kwargs.get('net_weight', gross - tare)
+        date = kwargs.get('date', 'N/A')
+        token = kwargs.get('token', '')
+        msg = (
+            f"📄 *Weighbridge Slip*\n\n"
+            f"Slip No.: {slip_no}\n"
+            f"Vehicle No.: {vehicle}\n"
+            f"Gross Weight: {gross:.2f} kg\n"
+            f"Tare Weight: {tare:.2f} kg\n"
+            f"Net Weight: {net:.2f} kg\n"
+            f"Date: {date}\n\n"
+            f"👉 View/Download PDF: {BASE_URL}/r/{token}"
+        )
+    return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=msg)
+
+async def send_whatsapp_pdf(phone: str, pdf_content: bytes, filename: str, receipt_id: int = 0, caption: Optional[str] = None) -> Dict[str, Any]:
+    return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=caption, pdf_content=pdf_content, filename=filename)
+
