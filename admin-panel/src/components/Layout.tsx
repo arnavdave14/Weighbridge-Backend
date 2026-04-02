@@ -53,7 +53,8 @@ export default function Layout() {
         <div className="px-3 py-4 border-t border-white/30">
           <button
             onClick={logout}
-            className="nav-item w-full text-red-500 hover:bg-red-50 hover:text-red-600"
+            className="nav-item w-full text-red-600 hover:bg-red-50 hover:text-red-700"
+            aria-label="Sign out of the admin panel"
           >
             <LogOut className="w-4.5 h-4.5" />
             Sign Out
@@ -62,10 +63,10 @@ export default function Layout() {
       </aside>
 
       {/* ── Main ── */}
-      <main className="flex-1 overflow-y-auto bg-gradient-to-br from-surface-50 via-blue-50/30 to-indigo-50/20 relative">
-        {/* Decorative blobs */}
-        <div className="pointer-events-none fixed top-10 right-10 w-80 h-80 bg-blue-200/30 rounded-full blur-3xl animate-blob" />
-        <div className="pointer-events-none fixed top-40 right-60 w-64 h-64 bg-indigo-200/25 rounded-full blur-3xl animate-blob animation-delay-2000" />
+      <main className="flex-1 overflow-y-auto bg-gradient-to-br from-surface-50 via-blue-50/20 to-indigo-50/10 relative">
+        {/* Simplified decorative glows (no heavy blur-3xl) */}
+        <div className="pointer-events-none fixed top-10 right-10 w-96 h-96 bg-blue-100/40 rounded-full blur-2xl" />
+        <div className="pointer-events-none fixed top-1/2 right-0 w-64 h-64 bg-indigo-100/30 rounded-full blur-2xl" />
 
         <div className="relative z-10 p-8 max-w-7xl mx-auto">
           <Outlet />

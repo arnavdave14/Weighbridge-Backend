@@ -31,7 +31,7 @@ class ActivationKeyCreate(BaseModel):
     """Used by admin to generate one or more keys for an App."""
     app_id: UUID4
     company_name: str
-    expiry_months: int = 12
+    expiry_date: datetime
     count: int = 1  # Bulk generation
 
     # Company-specific data (all optional at creation, can edit later)
@@ -40,6 +40,7 @@ class ActivationKeyCreate(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     phone: Optional[str] = None
+    mobile_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
     labels: Optional[List[str]] = []
     bill_header_1: Optional[str] = None
@@ -56,6 +57,7 @@ class ActivationKeyUpdate(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     phone: Optional[str] = None
+    mobile_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
     labels: Optional[List[str]] = None
     bill_header_1: Optional[str] = None
@@ -63,7 +65,7 @@ class ActivationKeyUpdate(BaseModel):
     bill_header_3: Optional[str] = None
     bill_footer: Optional[str] = None
     status: Optional[str] = None
-    extend_expiry_months: Optional[int] = None  # Positive = extend, negative = reduce
+    expiry_date: Optional[datetime] = None
 
 
 class ActivationKeyRead(BaseModel):
@@ -79,6 +81,7 @@ class ActivationKeyRead(BaseModel):
     email: Optional[str]
     address: Optional[str]
     phone: Optional[str]
+    mobile_number: Optional[str]
     whatsapp_number: Optional[str]
     labels: Optional[List[str]]
     bill_header_1: Optional[str]
@@ -137,6 +140,11 @@ class HardwareActivationResponse(BaseModel):
     bill_footer: Optional[str]
     logo_url: Optional[str]
     signup_image_url: Optional[str]
+    email: Optional[str]
+    address: Optional[str]
+    phone: Optional[str]
+    mobile_number: Optional[str]
+    whatsapp_number: Optional[str]
 
 
 # ─────────────────────────────────────────────

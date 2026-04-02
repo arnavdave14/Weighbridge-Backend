@@ -63,6 +63,7 @@ class ActivationKey(AdminBase):
     status = Column(String, default="active", nullable=False)  # active | expired | revoked
     expiry_date = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    revoked_at = Column(DateTime(timezone=True), nullable=True)  # Track when a license is cancelled
 
     # ──────────────────────────────────────────────────
     # ALL COMPANY DATA LIVES HERE (Activation Key Level)
@@ -77,6 +78,7 @@ class ActivationKey(AdminBase):
     email = Column(String, nullable=True)
     address = Column(Text, nullable=True)
     phone = Column(String, nullable=True)
+    mobile_number = Column(String, nullable=True)
     whatsapp_number = Column(String, nullable=True)
 
     # --- Bill / Receipt Configuration ---

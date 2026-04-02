@@ -62,7 +62,6 @@ class AdminAppService:
         if not app:
             raise HTTPException(status_code=404, detail="App not found")
 
-        expiry_date = datetime.now(timezone.utc) + relativedelta(months=key_in.expiry_months)
         generated = []
 
         for _ in range(key_in.count):
@@ -75,13 +74,14 @@ class AdminAppService:
                 app_id=key_in.app_id,
                 key_hash=hashed,
                 token=internal_token,
-                expiry_date=expiry_date,
+                expiry_date=key_in.expiry_date,
                 company_name=key_in.company_name,
                 logo_url=key_in.logo_url,
                 signup_image_url=key_in.signup_image_url,
                 email=key_in.email,
                 address=key_in.address,
                 phone=key_in.phone,
+                mobile_number=key_in.mobile_number,
                 whatsapp_number=key_in.whatsapp_number,
                 labels=key_in.labels or [],
                 bill_header_1=key_in.bill_header_1,
@@ -109,11 +109,6 @@ class AdminAppService:
 
         update_data = update_in.model_dump(exclude_unset=True)
 
-        # Handle expiry extension/reduction separately
-        extend_months = update_data.pop("extend_expiry_months", None)
-        if extend_months is not None:
-            key.expiry_date = key.expiry_date + relativedelta(months=extend_months)
-
         for field, value in update_data.items():
             setattr(key, field, value)
 
@@ -125,6 +120,7 @@ class AdminAppService:
         if not key:
             raise HTTPException(status_code=404, detail="Activation key not found")
         key.status = "revoked"
+        key.revoked_at = datetime.now(timezone.utc)
         return await AdminRepo.update_key(db, key)
 
     # ─────────────────────────────────────────
@@ -206,6 +202,11 @@ class AdminAppService:
             "bill_footer": matched_key.bill_footer,
             "logo_url": matched_key.logo_url,
             "signup_image_url": matched_key.signup_image_url,
+            "email": matched_key.email,
+            "address": matched_key.address,
+            "phone": matched_key.phone,
+            "mobile_number": matched_key.mobile_number,
+            "whatsapp_number": matched_key.whatsapp_number,
         }
 
     # ─────────────────────────────────────────
@@ -227,3 +228,45 @@ class AdminAppService:
             "revoked_keys": status_counts.get("revoked", 0),
             "recent_notifications": notif_count,
         }
+
+    @staticmethod
+    async def get_dashboard_activity(db: AsyncSession) -> List[dict]:
+        """
+        Calculates activations and revocations for the last 10 days.
+        """
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        days = []
+        for i in range(9, -1, -1):
+            day = now - timedelta(days=i)
+            # Normalize to start and end of day for querying
+            start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = day.replace(hour=23, minute=59, second=59, microsecond=999999)
+            days.append((start_of_day, end_of_day))
+
+        activity = []
+        from sqlalchemy import select, func
+        from app.models.admin_models import ActivationKey
+
+        for start, end in days:
+            # Count Activations (keys created)
+            q_act = select(func.count(ActivationKey.id)).where(
+                ActivationKey.created_at.between(start, end)
+            )
+            res_act = await db.execute(q_act)
+            count_act = res_act.scalar() or 0
+
+            # Count Revocations (keys revoked)
+            q_rev = select(func.count(ActivationKey.id)).where(
+                ActivationKey.revoked_at.between(start, end)
+            )
+            res_rev = await db.execute(q_rev)
+            count_rev = res_rev.scalar() or 0
+
+            activity.append({
+                "day": start.strftime("%b %d"),
+                "activations": count_act,
+                "revocations": count_rev
+            })
+
+        return activity

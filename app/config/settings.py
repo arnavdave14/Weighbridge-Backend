@@ -35,14 +35,23 @@ class Settings:
     MAX_SYNC_RETRIES: int = 5
     SYNC_BATCH_SIZE: int = 50
     BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+    
+    # UPLOAD CONFIG
+    UPLOAD_DIR: str = "static/uploads"
 
     def validate_and_setup(self):
         """Ensures the environment is valid and ready for operation."""
         # 1. Directory Setup for SQLite
         sqlite_file = Path(self.SQLITE_PATH)
         sqlite_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # 2. Directory Setup for Uploads (including subfolders)
+        upload_path = Path(self.UPLOAD_DIR)
+        upload_path.mkdir(parents=True, exist_ok=True)
+        (upload_path / "logos").mkdir(parents=True, exist_ok=True)
+        (upload_path / "signups").mkdir(parents=True, exist_ok=True)
         
-        # 2. Environment Validation
+        # 3. Environment Validation
         pg_url = self.POSTGRES_URL or self.REMOTE_DATABASE_URL
         if self.DB_MODE in ["dual", "postgres"] and not pg_url:
             msg = f"CRITICAL: POSTGRES_URL is required when DB_MODE is '{self.DB_MODE}'."

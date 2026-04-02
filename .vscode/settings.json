@@ -3,5 +3,6 @@
     "python.terminal.activateEnvInCurrentTerminal": true,
     "python.analysis.extraPaths": [
         "${workspaceFolder}/venv/lib/python3.14/site-packages"
-    ]
+    ],
+    "css.lint.unknownAtRules": "ignore"
 }

@@ -79,8 +79,13 @@ class AdminRepo:
         return result.scalars().all()
 
     @staticmethod
-    async def get_all_keys(db: AsyncSession) -> List[ActivationKey]:
-        result = await db.execute(select(ActivationKey).order_by(ActivationKey.created_at.desc()))
+    async def get_all_keys(db: AsyncSession, limit: int = 100, offset: int = 0) -> List[ActivationKey]:
+        result = await db.execute(
+            select(ActivationKey)
+            .order_by(ActivationKey.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return result.scalars().all()
 
     @staticmethod

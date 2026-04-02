@@ -29,6 +29,15 @@ async def get_dashboard_stats(
     return await AdminAppService.get_dashboard_stats(db)
 
 
+@router.get("/dashboard/activity", response_model=List[dict])
+async def get_dashboard_activity(
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
+):
+    """Activations and Revocations per day for the last 10 days."""
+    return await AdminAppService.get_dashboard_activity(db)
+
+
 # ─────────────────────────────────────────────────────────────
 # App (Product) Endpoints
 # ─────────────────────────────────────────────────────────────
@@ -82,10 +91,12 @@ async def list_keys_for_app(
 @router.get("/keys/all", response_model=List[ActivationKeyRead])
 async def list_all_keys(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    _: dict = Depends(get_current_admin),
+    limit: int = 200,
+    offset: int = 0
 ):
-    """List all activation keys across all apps."""
-    return await AdminRepo.get_all_keys(db)
+    """List all activation keys across all apps with pagination."""
+    return await AdminRepo.get_all_keys(db, limit=limit, offset=offset)
 
 
 @router.put("/keys/{key_id}", response_model=ActivationKeyRead)

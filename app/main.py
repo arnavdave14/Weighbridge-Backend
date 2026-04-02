@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth
+from fastapi.staticfiles import StaticFiles
+from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
 from app.database.base import Base
@@ -39,6 +40,10 @@ app.include_router(admin_auth.router)
 app.include_router(admin_apps.router)
 app.include_router(activation.router)
 app.include_router(notifications.router)
+app.include_router(admin_branding.router)
+
+# Static Files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.on_event("startup")
