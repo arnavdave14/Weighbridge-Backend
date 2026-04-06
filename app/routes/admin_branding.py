@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from app.config.settings import settings
+from app.api.admin_deps import get_current_admin
 import os
 import uuid
 from typing import Dict
@@ -29,13 +30,19 @@ async def _handle_upload(file: UploadFile, subfolder: str) -> str:
     return f"{settings.BASE_URL}/static/uploads/{subfolder}/{unique_filename}"
 
 @router.post("/logo")
-async def upload_logo(file: UploadFile = File(...)) -> Dict[str, str]:
-    """Upload a company logo."""
+async def upload_logo(
+    file: UploadFile = File(...),
+    _: dict = Depends(get_current_admin)
+) -> Dict[str, str]:
+    """Upload a company logo. Requires valid admin Bearer token."""
     url = await _handle_upload(file, "logos")
     return {"url": url}
 
 @router.post("/signup")
-async def upload_signup_image(file: UploadFile = File(...)) -> Dict[str, str]:
-    """Upload a sign-up illustration image."""
+async def upload_signup_image(
+    file: UploadFile = File(...),
+    _: dict = Depends(get_current_admin)
+) -> Dict[str, str]:
+    """Upload a sign-up illustration image. Requires valid admin Bearer token."""
     url = await _handle_upload(file, "signups")
     return {"url": url}

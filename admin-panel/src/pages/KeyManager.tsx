@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import api from '../services/api'
 import { format, formatDistanceToNow } from 'date-fns'
+import { useToast } from '../context/ToastContext'
 
 interface App { id: string; app_id: string; app_name: string }
 
@@ -36,15 +37,15 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-const KeyRow = memo(({ item, onCopy, onExtend, onRevoke, copiedId }: { 
-  item: Key; 
+const KeyRow = memo(({ item, onCopy, onExtend, onRevoke, copiedId }: {
+  item: Key;
   onCopy: (text: string, id: string) => void;
   onExtend: (id: string, current: string) => void;
   onRevoke: (id: string) => void;
   copiedId: string | null;
 }) => {
   const isExpired = new Date(item.expiry_date) < new Date()
-  
+
   return (
     <tr className="hover:bg-surface-50/50 transition-colors">
       <td>
@@ -100,8 +101,8 @@ const KeyRow = memo(({ item, onCopy, onExtend, onRevoke, copiedId }: {
   )
 })
 
-const GeneratedKeysModal = memo(({ keys, onCopy, copiedId, onClose }: { 
-  keys: string[]; 
+const GeneratedKeysModal = memo(({ keys, onCopy, copiedId, onClose }: {
+  keys: string[];
   onCopy: (text: string, id: string) => void;
   copiedId: string | null;
   onClose: () => void;
@@ -137,13 +138,20 @@ const GeneratedKeysModal = memo(({ keys, onCopy, copiedId, onClose }: {
   </AnimatePresence>
 ))
 
-const ImageUpload = ({ label, value, target, onChange }: { label: string; value: string; target: 'logo' | 'signup'; onChange: (val: string) => void }) => {
+const ImageUpload = ({ label, value, target, appId, onChange }: { label: string; value: string; target: 'logo' | 'signup'; appId: string; onChange: (val: string) => void }) => {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const toast = useToast()
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+
+    if (!appId) {
+      toast.error('You have to first select the application.')
+      console.warn(`[KeyManager: ImageUpload] Attempted upload without appId for ${target}`)
+      return
+    }
 
     setUploading(true)
     const formData = new FormData()
@@ -155,9 +163,11 @@ const ImageUpload = ({ label, value, target, onChange }: { label: string; value:
         headers: { 'Content-Type': 'multipart/form-data' }
       })
       onChange(data.url)
-    } catch (err) {
-      console.error('Upload failed:', err)
-      alert('Upload failed. Please try again.')
+      toast.success(`${label} uploaded successfully!`)
+      console.log(`[KeyManager: ImageUpload] Success: ${target} -> ${data.url}`)
+    } catch (err: any) {
+      console.error(`[KeyManager: ImageUpload] Failed: ${target}`, err)
+      toast.error(err.response?.data?.detail || 'Upload failed. Please try again.')
     } finally {
       setUploading(false)
     }
@@ -171,9 +181,9 @@ const ImageUpload = ({ label, value, target, onChange }: { label: string; value:
           <div className="relative w-16 h-16 rounded-xl border border-surface-200 overflow-hidden bg-surface-50 shrink-0 group">
             <img src={value} alt="Preview" className="w-full h-full object-contain" />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-              <button 
-                type="button" 
-                onClick={() => onChange('')} 
+              <button
+                type="button"
+                onClick={() => onChange('')}
                 className="p-1 rounded-full bg-white/20 hover:bg-white/40 text-white"
               >
                 <X className="w-3 h-3" />
@@ -185,18 +195,18 @@ const ImageUpload = ({ label, value, target, onChange }: { label: string; value:
             <Plus className="w-5 h-5" />
           </div>
         )}
-        
+
         <div className="flex-1">
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileChange} 
-            className="hidden" 
-            accept="image/*" 
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            className="hidden"
+            accept="image/*"
           />
           <div className="flex items-center gap-2">
-            <button 
-              type="button" 
+            <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
               className="btn-secondary py-1.5 px-3 text-xs flex items-center gap-2"
@@ -216,12 +226,13 @@ const ImageUpload = ({ label, value, target, onChange }: { label: string; value:
   )
 }
 
-const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: { 
-  isOpen: boolean; 
-  onClose: () => void; 
+const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
+  isOpen: boolean;
+  onClose: () => void;
   apps: App[];
   onSuccess: (rawKeys: string[]) => void;
 }) => {
+  const toast = useToast()
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
     app_id: '', company_name: '', expiry_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'), count: 1, email: '',
@@ -241,6 +252,12 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+
+    if (!form.app_id) {
+      toast.error('You have to first select the application.')
+      return
+    }
+
     setSaving(true)
     try {
       const payload = {
@@ -250,10 +267,11 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
       }
       const { data } = await api.post('/apps/keys', payload)
       onSuccess(data.map((d: any) => d.raw_activation_key))
+      toast.success(`Successfully generated ${form.count} activation key(s)!`)
       onClose()
     } catch (e: any) {
-      console.error(e)
-      alert(e.response?.data?.detail || 'Generation failed')
+      console.error('[KeyManager: GenerateKey] Failed:', e)
+      toast.error(e.response?.data?.detail || 'Generation failed')
     } finally {
       setSaving(false)
     }
@@ -299,17 +317,19 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                     <input required value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })}
                       placeholder="e.g. Bharat Steel Ltd" className="form-input font-bold" />
                   </div>
-                  <ImageUpload 
-                    label="Company Logo" 
-                    value={form.logo_url} 
+                  <ImageUpload
+                    label="Company Logo"
+                    value={form.logo_url}
                     target="logo"
-                    onChange={(url) => setForm(f => ({ ...f, logo_url: url }))} 
+                    appId={form.app_id}
+                    onChange={(url) => setForm(f => ({ ...f, logo_url: url }))}
                   />
-                  <ImageUpload 
-                    label="Sign-Up Image" 
-                    value={form.signup_image_url} 
+                  <ImageUpload
+                    label="Sign-Up Image"
+                    value={form.signup_image_url}
                     target="signup"
-                    onChange={(url) => setForm(f => ({ ...f, signup_image_url: url }))} 
+                    appId={form.app_id}
+                    onChange={(url) => setForm(f => ({ ...f, signup_image_url: url }))}
                   />
                 </div>
               </div>
@@ -345,19 +365,19 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="form-label">Expiry Date *</label>
-                    <input 
-                      type="date" 
-                      required 
-                      value={form.expiry_date} 
-                      onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} 
-                      className="form-input" 
+                    <input
+                      type="date"
+                      required
+                      value={form.expiry_date}
+                      onChange={(e) => setForm({ ...form, expiry_date: e.target.value })}
+                      className="form-input"
                     />
                   </div>
                   <div><label className="form-label">Key Count</label><input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" /></div>
                 </div>
               </div>
 
-              <div className="pt-4 flex gap-3 sticky bottom-0 bg-white/90 backdrop-blur-sm pb-2">
+              <div className="pt-4 flex gap-3 sticky bottom-0 backdrop-blur-sm pb-2">
                 <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
@@ -372,14 +392,14 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   )
 })
 
-const ExtendKeyModal = memo(({ keyId, currentExpiry, onClose, onConfirm }: { 
-  keyId: string | null; 
+const ExtendKeyModal = memo(({ keyId, currentExpiry, onClose, onConfirm }: {
+  keyId: string | null;
   currentExpiry: string;
-  onClose: () => void; 
+  onClose: () => void;
   onConfirm: (date: string) => void;
 }) => {
   const [newDate, setNewDate] = useState('')
-  
+
   useEffect(() => {
     if (currentExpiry) {
       setNewDate(format(new Date(currentExpiry), 'yyyy-MM-dd'))
@@ -394,11 +414,11 @@ const ExtendKeyModal = memo(({ keyId, currentExpiry, onClose, onConfirm }: {
             className="glass rounded-2xl p-6 max-w-sm w-full border border-white/40 shadow-xl">
             <div className="flex items-center gap-3 mb-5"><CalendarClock className="w-5 h-5 text-brand-600" /><h3 className="font-bold text-surface-900">Modify Expiry Date</h3></div>
             <label className="form-label">New Expiry Date</label>
-            <input 
-              type="date" 
-              value={newDate} 
-              onChange={(e) => setNewDate(e.target.value)} 
-              className="form-input mb-4" 
+            <input
+              type="date"
+              value={newDate}
+              onChange={(e) => setNewDate(e.target.value)}
+              className="form-input mb-4"
             />
             <div className="flex gap-3">
               <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
@@ -420,18 +440,22 @@ export default function KeyManager() {
   const [loadingKeys, setLoadingKeys] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [extendKey, setExtendKey] = useState<{id: string, expiry: string} | null>(null)
+  const [extendKey, setExtendKey] = useState<{ id: string, expiry: string } | null>(null)
   const [generatedRawKeys, setGeneratedRawKeys] = useState<string[]>([])
+  const toast = useToast()
 
   const fetchAllKeys = useCallback(async () => {
     setLoadingKeys(true)
     try {
       const { data } = await api.get('/apps/keys/all')
       setAllKeys(data)
+    } catch (err) {
+      console.error('[KeyManager: FetchKeys] Failed:', err)
+      toast.error('Could not load license keys.')
     } finally {
       setLoadingKeys(false)
     }
-  }, [])
+  }, [toast])
 
   useEffect(() => {
     api.get('/apps').then((r) => setApps(r.data))
@@ -445,21 +469,34 @@ export default function KeyManager() {
   const copyToClipboard = useCallback((text: string, id: string) => {
     navigator.clipboard.writeText(text)
     setCopiedId(id)
+    toast.success('Key copied to clipboard!')
     setTimeout(() => setCopiedId(null), 2000)
-  }, [])
+  }, [toast])
 
   const handleRevoke = useCallback(async (keyId: string) => {
     if (!confirm('Revoke this license?')) return
-    await api.delete(`/apps/keys/${keyId}/revoke`)
-    fetchAllKeys()
-  }, [fetchAllKeys])
+    try {
+      await api.delete(`/apps/keys/${keyId}/revoke`)
+      toast.success('License revoked successfully.')
+      fetchAllKeys()
+    } catch (err) {
+      console.error('[KeyManager: RevokeKey] Failed:', err)
+      toast.error('Could not revoke license.')
+    }
+  }, [fetchAllKeys, toast])
 
   const handleUpdateExpiry = useCallback(async (isoDate: string) => {
     if (!extendKey) return
-    await api.put(`/apps/keys/${extendKey.id}`, { expiry_date: isoDate })
-    setExtendKey(null)
-    fetchAllKeys()
-  }, [extendKey, fetchAllKeys])
+    try {
+      await api.put(`/apps/keys/${extendKey.id}`, { expiry_date: isoDate })
+      toast.success('Expiry date updated.')
+      setExtendKey(null)
+      fetchAllKeys()
+    } catch (err) {
+      console.error('[KeyManager: UpdateExpiry] Failed:', err)
+      toast.error('Could not update expiry date.')
+    }
+  }, [extendKey, fetchAllKeys, toast])
 
   const handleCreateSuccess = useCallback((keys: string[]) => {
     setGeneratedRawKeys(keys)
@@ -475,19 +512,19 @@ export default function KeyManager() {
 
       <GeneratedKeysModal keys={generatedRawKeys} onCopy={copyToClipboard} copiedId={copiedId} onClose={() => setGeneratedRawKeys([])} />
       <CreateKeyDrawer isOpen={showCreate} onClose={() => setShowCreate(false)} apps={apps} onSuccess={handleCreateSuccess} />
-      <ExtendKeyModal 
-        keyId={extendKey?.id || null} 
-        currentExpiry={extendKey?.expiry || ''} 
-        onClose={() => setExtendKey(null)} 
-        onConfirm={handleUpdateExpiry} 
+      <ExtendKeyModal
+        keyId={extendKey?.id || null}
+        currentExpiry={extendKey?.expiry || ''}
+        onClose={() => setExtendKey(null)}
+        onConfirm={handleUpdateExpiry}
       />
 
       <div className="glass rounded-xl px-5 py-3 flex items-center gap-4 border border-white/50">
         <span className="text-sm font-medium text-surface-600">Filter:</span>
-        <select 
+        <select
           aria-label="Filter licenses by application"
-          value={selectedAppId} 
-          onChange={(e) => setSelectedAppId(e.target.value)} 
+          value={selectedAppId}
+          onChange={(e) => setSelectedAppId(e.target.value)}
           className="form-input max-w-xs"
         >
           <option value="">All Applications</option>
@@ -506,13 +543,13 @@ export default function KeyManager() {
             <thead><tr><th>Company</th><th>Token</th><th>Status</th><th>Expiry</th><th>Issued</th><th className="text-right">Actions</th></tr></thead>
             <tbody>
               {filteredKeys.map((key) => (
-                <KeyRow 
-                  key={key.id} 
-                  item={key} 
-                  onCopy={copyToClipboard} 
-                  onExtend={(id, expiry) => setExtendKey({ id, expiry })} 
-                  onRevoke={handleRevoke} 
-                  copiedId={copiedId} 
+                <KeyRow
+                  key={key.id}
+                  item={key}
+                  onCopy={copyToClipboard}
+                  onExtend={(id, expiry) => setExtendKey({ id, expiry })}
+                  onRevoke={handleRevoke}
+                  copiedId={copiedId}
                 />
               ))}
             </tbody>

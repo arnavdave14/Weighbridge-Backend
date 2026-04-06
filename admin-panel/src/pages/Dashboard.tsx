@@ -9,6 +9,7 @@ import {
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from 'recharts'
 import api from '../services/api'
+import { useToast } from '../context/ToastContext'
 
 interface Stats {
   total_apps: number
@@ -39,6 +40,7 @@ const cardVariants = {
 }
 
 export default function Dashboard() {
+  const toast = useToast()
   const [stats, setStats] = useState<Stats | null>(null)
   const [activity, setActivity] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -54,7 +56,8 @@ export default function Dashboard() {
         setStats(statsRes.data)
         setActivity(activityRes.data)
       } catch (err) {
-        console.error('Dashboard fetch failed:', err)
+        console.error('[Dashboard: Fetch] Failed:', err)
+        toast.error('Could not load dashboard information.')
       } finally {
         setLoading(false)
       }

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Scale, Mail, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react'
 import { useAuthStore } from '../store/useStore'
 import api from '../services/api'
+import { useToast } from '../context/ToastContext'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -13,6 +14,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false)
   const { login } = useAuthStore()
   const navigate = useNavigate()
+  const toast = useToast()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,9 +26,13 @@ export default function Login() {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       })
       login(data.access_token)
+      toast.success('Successfully logged in!')
       navigate('/')
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Login failed. Check credentials.')
+      const msg = err?.response?.data?.detail ?? 'Login failed. Check credentials.'
+      setError(msg)
+      toast.error(msg)
+      console.error('[Login: Auth] Failed:', err)
     } finally {
       setBusy(false)
     }

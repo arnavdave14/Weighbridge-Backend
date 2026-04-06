@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Bell, AlertTriangle, Info, RefreshCw, Loader2 } from 'lucide-react'
 import api from '../services/api'
 import { format, formatDistanceToNow } from 'date-fns'
+import { useToast } from '../context/ToastContext'
 
 interface Notification {
   id: string
@@ -20,6 +21,7 @@ const typeConfig = {
 }
 
 export default function Notifications() {
+  const toast = useToast()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<string>('all')
@@ -29,8 +31,9 @@ export default function Notifications() {
     try {
       const { data } = await api.get('/notifications')
       setNotifications(data)
-    } catch (e) {
-      console.error(e)
+    } catch (err) {
+      console.error('[Notifications: Fetch] Failed:', err)
+      toast.error('Could not load security alerts.')
     } finally {
       setLoading(false)
     }

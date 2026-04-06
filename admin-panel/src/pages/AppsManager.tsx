@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, AppWindow, X, Loader2, ChevronRight } from 'lucide-react'
 import api from '../services/api'
 import { format } from 'date-fns'
+import { useToast } from '../context/ToastContext'
 
 interface App {
   id: string
@@ -60,6 +61,7 @@ const AppCard = memo(({ app, index }: { app: App; index: number }) => {
 })
 
 const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: () => void }) => {
+  const toast = useToast()
   const [form, setForm] = useState({ app_name: '', description: '' })
   const [saving, setSaving] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
@@ -77,10 +79,12 @@ const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean;
     setSaving(true)
     try {
       await api.post('/apps', form)
+      toast.success(`Application "${form.app_name}" created successfully!`)
       onSuccess()
       onClose()
-    } catch (e) {
-      console.error(e)
+    } catch (err: any) {
+      console.error('[AppsManager: CreateApp] Failed:', err)
+      toast.error(err.response?.data?.detail || 'Failed to create application.')
     } finally {
       setSaving(false)
     }
@@ -142,6 +146,7 @@ const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean;
 // --- Main Page ---
 
 export default function AppsManager() {
+  const toast = useToast()
   const [apps, setApps] = useState<App[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -150,12 +155,13 @@ export default function AppsManager() {
     try {
       const { data } = await api.get('/apps')
       setApps(data)
-    } catch (e) {
-      console.error(e)
+    } catch (err) {
+      console.error('[AppsManager: FetchApps] Failed:', err)
+      toast.error('Could not load applications.')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [toast])
 
   useEffect(() => { fetchApps() }, [fetchApps])
 

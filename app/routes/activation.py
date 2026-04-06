@@ -14,17 +14,19 @@ router = APIRouter(prefix="/admin/activation", tags=["Admin — Activation"])
 @router.post("/verify", response_model=HardwareActivationResponse)
 async def verify_hardware_key(
     req: HardwareActivationRequest,
-    db: AsyncSession = Depends(get_remote_db)
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
 ):
     """
-    PUBLIC endpoint — called by the local weighbridge device to activate.
-    No admin token required; the key IS the authentication.
+    JWT-protected endpoint — verifies a hardware activation key.
+    Requires a valid admin Bearer token in the Authorization header.
 
     Security chain:
-    1. Hash-compare raw key against all stored bcrypt hashes.
-    2. Ensure the matched key belongs to the requested App (cross-tenant check).
-    3. Verify status is 'active' and expiry has not passed.
-    4. Return all company-specific configuration if valid.
+    1. Admin Bearer token is validated first.
+    2. Hash-compare raw key against all stored bcrypt hashes.
+    3. Ensure the matched key belongs to the requested App (cross-tenant check).
+    4. Verify status is 'active' and expiry has not passed.
+    5. Return all company-specific configuration if valid.
     """
     return await AdminAppService.verify_hardware_activation(
         db=db,
