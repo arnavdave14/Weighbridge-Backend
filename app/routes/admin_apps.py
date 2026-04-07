@@ -57,8 +57,28 @@ async def list_apps(
     db: AsyncSession = Depends(get_remote_db),
     _: dict = Depends(get_current_admin)
 ):
-    """List all software products."""
+    """List all active software products."""
     return await AdminAppService.list_apps(db)
+
+
+@router.delete("/{app_id}")
+async def delete_app(
+    app_id: uuid.UUID,
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
+):
+    """Soft-delete an application."""
+    await AdminAppService.delete_app(db, app_id)
+    return {"message": "Application soft-deleted successfully."}
+
+
+@router.get("/history", response_model=List[AppRead])
+async def get_app_history(
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
+):
+    """List all soft-deleted software products."""
+    return await AdminAppService.get_app_history(db)
 
 
 # ─────────────────────────────────────────────────────────────

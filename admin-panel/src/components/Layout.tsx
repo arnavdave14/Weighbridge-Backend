@@ -1,12 +1,13 @@
 import { NavLink, Outlet, Navigate } from 'react-router-dom'
 import { useAuthStore } from '../store/useStore'
 import {
-  LayoutDashboard, AppWindow, KeyRound, Bell, LogOut, Scale,
+  LayoutDashboard, AppWindow, KeyRound, Bell, LogOut, Scale, History
 } from 'lucide-react'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/apps', icon: AppWindow, label: 'Applications' },
+  { to: '/apps/history', icon: History, label: 'Deletion History' },
   { to: '/keys', icon: KeyRound, label: 'License Keys' },
   { to: '/notifications', icon: Bell, label: 'Alerts' },
 ]

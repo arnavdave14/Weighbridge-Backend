@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
 import {
   AppWindow, KeyRound, CheckCircle2, XCircle, Ban,
   Bell, TrendingUp, Loader2,
@@ -23,12 +24,12 @@ interface Stats {
 const PIE_COLORS = ['#22c55e', '#f59e0b', '#ef4444']
 
 const CARDS_CONFIG = [
-  { label: 'Total Applications', icon: AppWindow, color: 'text-brand-600', bg: 'bg-brand-50', border: 'border-brand-100', key: 'total_apps' },
-  { label: 'Total Licenses', icon: KeyRound, color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-100', key: 'total_keys' },
-  { label: 'Active Licenses', icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100', key: 'active_keys' },
-  { label: 'Expired Licenses', icon: XCircle, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100', key: 'expired_keys' },
-  { label: 'Revoked Licenses', icon: Ban, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100', key: 'revoked_keys' },
-  { label: 'Security Alerts', icon: Bell, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100', key: 'recent_notifications' },
+  { label: 'Total Applications', icon: AppWindow, color: 'text-brand-600', bg: 'bg-brand-50', border: 'border-brand-100', key: 'total_apps', to: '/apps' },
+  { label: 'Total Licenses', icon: KeyRound, color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-100', key: 'total_keys', to: '/keys' },
+  { label: 'Active Licenses', icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100', key: 'active_keys', to: '/keys' },
+  { label: 'Expired Licenses', icon: XCircle, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100', key: 'expired_keys', to: '/keys' },
+  { label: 'Revoked Licenses', icon: Ban, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-100', key: 'revoked_keys', to: '/keys' },
+  { label: 'Security Alerts', icon: Bell, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100', key: 'recent_notifications', to: '/notifications' },
 ]
 
 const cardVariants = {
@@ -110,17 +111,22 @@ export default function Dashboard() {
                 initial="hidden"
                 animate="visible"
                 variants={cardVariants}
-                className={`stat-card border ${card.border}`}
+                className="group"
               >
-                <div className="flex items-center gap-4">
-                  <div className={`p-3 rounded-xl ${card.bg}`}>
-                    <card.icon className={`w-5 h-5 ${card.color}`} />
+                <Link
+                  to={card.to}
+                  className={`stat-card border ${card.border} block hover:shadow-lg transition-all active:scale-[0.98]`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`p-3 rounded-xl ${card.bg}`}>
+                      <card.icon className={`w-5 h-5 ${card.color}`} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-surface-500">{card.label}</p>
+                      <p className="text-3xl font-bold text-surface-900">{card.value}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs font-medium text-surface-500">{card.label}</p>
-                    <p className="text-3xl font-bold text-surface-900">{card.value}</p>
-                  </div>
-                </div>
+                </Link>
               </motion.div>
             ))}
           </div>

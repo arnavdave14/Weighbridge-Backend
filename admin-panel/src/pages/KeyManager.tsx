@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo, type FormEvent, useCallback, memo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useSearchParams } from 'react-router-dom'
 import {
   Plus, X, Loader2, KeyRound, CheckCircle2, XCircle, Ban,
   Clock, Copy, Check, Trash2, CalendarClock,
+  Filter, Calendar
 } from 'lucide-react'
 import api from '../services/api'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useToast } from '../context/ToastContext'
 
 interface App { id: string; app_id: string; app_name: string }
@@ -37,8 +39,9 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-const KeyRow = memo(({ item, onCopy, onExtend, onRevoke, copiedId }: {
+const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, copiedId }: {
   item: Key;
+  appName: string;
   onCopy: (text: string, id: string) => void;
   onExtend: (id: string, current: string) => void;
   onRevoke: (id: string) => void;
@@ -55,7 +58,7 @@ const KeyRow = memo(({ item, onCopy, onExtend, onRevoke, copiedId }: {
           </div>
           <div>
             <p className="font-semibold text-surface-900 text-[13px]">{item.company_name}</p>
-            {item.email && <p className="text-[11px] text-surface-400">{item.email}</p>}
+            <p className="text-[10px] text-brand-600 bg-brand-50 px-1 py-0.5 rounded inline-block mt-0.5">{appName}</p>
           </div>
         </div>
       </td>
@@ -158,7 +161,7 @@ const ImageUpload = ({ label, value, target, appId, onChange }: { label: string;
     formData.append('file', file)
 
     try {
-      const endpoint = target === 'logo' ? '/admin/upload/logo' : '/admin/upload/signup'
+      const endpoint = target === 'logo' ? '/upload/logo' : '/upload/signup'
       const { data } = await api.post(endpoint, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
@@ -434,15 +437,35 @@ const ExtendKeyModal = memo(({ keyId, currentExpiry, onClose, onConfirm }: {
 // --- Main Page ---
 
 export default function KeyManager() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [apps, setApps] = useState<App[]>([])
   const [allKeys, setAllKeys] = useState<Key[]>([])
-  const [selectedAppId, setSelectedAppId] = useState<string>('')
+  const [selectedAppId, setSelectedAppId] = useState<string>(searchParams.get('appId') || '')
   const [loadingKeys, setLoadingKeys] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [extendKey, setExtendKey] = useState<{ id: string, expiry: string } | null>(null)
   const [generatedRawKeys, setGeneratedRawKeys] = useState<string[]>([])
+  const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
+  const [dateRange, setDateRange] = useState({ start: '', end: '' })
   const toast = useToast()
+
+  // Sync selectedAppId with URL param if it changes externally
+  useEffect(() => {
+    const appId = searchParams.get('appId')
+    if (appId && appId !== selectedAppId) {
+      setSelectedAppId(appId)
+    }
+  }, [searchParams, selectedAppId])
+
+  const handleFilterChange = (id: string) => {
+    setSelectedAppId(id)
+    if (id) {
+      setSearchParams({ appId: id })
+    } else {
+      setSearchParams({})
+    }
+  }
 
   const fetchAllKeys = useCallback(async () => {
     setLoadingKeys(true)
@@ -462,9 +485,26 @@ export default function KeyManager() {
     fetchAllKeys()
   }, [fetchAllKeys])
 
-  const filteredKeys = useMemo(() => {
-    return selectedAppId ? allKeys.filter((k) => k.app_id === selectedAppId) : allKeys
-  }, [allKeys, selectedAppId])
+  const filteredAndSortedKeys = useMemo(() => {
+    let result = selectedAppId ? allKeys.filter((k) => k.app_id === selectedAppId) : [...allKeys]
+
+    if (sortOrder === 'custom' && dateRange.start && dateRange.end) {
+      const start = startOfDay(new Date(dateRange.start))
+      const end = endOfDay(new Date(dateRange.end))
+      result = result.filter(key => {
+        const date = new Date(key.created_at)
+        return isWithinInterval(date, { start, end })
+      })
+    }
+
+    result.sort((a, b) => {
+      const d1 = new Date(a.created_at).getTime()
+      const d2 = new Date(b.created_at).getTime()
+      return sortOrder === 'oldest' ? d1 - d2 : d2 - d1
+    })
+
+    return result
+  }, [allKeys, selectedAppId, sortOrder, dateRange])
 
   const copyToClipboard = useCallback((text: string, id: string) => {
     navigator.clipboard.writeText(text)
@@ -519,33 +559,75 @@ export default function KeyManager() {
         onConfirm={handleUpdateExpiry}
       />
 
-      <div className="glass rounded-xl px-5 py-3 flex items-center gap-4 border border-white/50">
-        <span className="text-sm font-medium text-surface-600">Filter:</span>
-        <select
-          aria-label="Filter licenses by application"
-          value={selectedAppId}
-          onChange={(e) => setSelectedAppId(e.target.value)}
-          className="form-input max-w-xs"
-        >
-          <option value="">All Applications</option>
-          {apps.map((a) => <option key={a.id} value={a.id}>{a.app_name}</option>)}
-        </select>
-        <span className="ml-auto text-xs text-surface-400">{filteredKeys.length} licenses</span>
+      <div className="flex flex-wrap items-center gap-4 glass p-4 rounded-xl border border-white/50">
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-surface-400" />
+          <select
+            aria-label="Filter licenses by application"
+            value={selectedAppId}
+            onChange={(e) => handleFilterChange(e.target.value)}
+            className="form-input max-w-xs py-1.5 text-sm"
+          >
+            <option value="">All Applications</option>
+            {apps.map((a) => <option key={a.id} value={a.id}>{a.app_name}</option>)}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2 border-l border-surface-200 pl-4">
+          <select 
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as any)}
+            className="bg-transparent text-sm font-medium text-surface-700 outline-none cursor-pointer"
+          >
+            <option value="latest">Latest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="custom">Custom Date</option>
+          </select>
+        </div>
+
+        <span className="ml-auto text-xs text-surface-400">{filteredAndSortedKeys.length} licenses</span>
       </div>
+
+      {sortOrder === 'custom' && (
+        <motion.div 
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="glass p-4 rounded-xl border border-white/40 flex flex-wrap items-center gap-4 mt-2"
+        >
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-brand-600" />
+            <span className="text-sm font-medium text-surface-600">Range:</span>
+          </div>
+          <input 
+            type="date" 
+            value={dateRange.start}
+            onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+            className="form-input py-1.5 text-sm max-w-[160px]"
+          />
+          <span className="text-surface-400">to</span>
+          <input 
+            type="date" 
+            value={dateRange.end}
+            onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+            className="form-input py-1.5 text-sm max-w-[160px]"
+          />
+        </motion.div>
+      )}
 
       <div className="glass rounded-2xl border border-white/50 overflow-hidden">
         {loadingKeys ? (
           <div className="flex items-center justify-center py-20 text-surface-400"><Loader2 className="w-7 h-7 animate-spin" /></div>
-        ) : filteredKeys.length === 0 ? (
+        ) : filteredAndSortedKeys.length === 0 ? (
           <div className="text-center py-20 text-surface-400"><KeyRound className="w-12 h-12 mx-auto mb-3 opacity-20" /><p>No keys found.</p></div>
         ) : (
           <table className="data-table">
-            <thead><tr><th>Company</th><th>Token</th><th>Status</th><th>Expiry</th><th>Issued</th><th className="text-right">Actions</th></tr></thead>
+            <thead><tr><th>Company / App</th><th>Token</th><th>Status</th><th>Expiry</th><th>Issued</th><th className="text-right">Actions</th></tr></thead>
             <tbody>
-              {filteredKeys.map((key) => (
+              {filteredAndSortedKeys.map((key: Key) => (
                 <KeyRow
                   key={key.id}
                   item={key}
+                  appName={apps.find(a => a.id === key.app_id)?.app_name || 'Unknown App'}
                   onCopy={copyToClipboard}
                   onExtend={(id, expiry) => setExtendKey({ id, expiry })}
                   onRevoke={handleRevoke}

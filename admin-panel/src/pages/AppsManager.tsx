@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, type FormEvent, useCallback, memo } from 'react'
+import { useState, useEffect, useRef, type FormEvent, useCallback, memo, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, AppWindow, X, Loader2, ChevronRight } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, AppWindow, X, Loader2, ChevronRight, Trash2, Filter, Calendar, KeyRound } from 'lucide-react'
 import api from '../services/api'
-import { format } from 'date-fns'
+import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useToast } from '../context/ToastContext'
 
 interface App {
@@ -11,6 +12,7 @@ interface App {
   app_name: string
   description?: string
   created_at: string
+  keys_count: number
 }
 
 const COLORS = [
@@ -23,35 +25,58 @@ const COLORS = [
 
 // --- Sub-components ---
 
-const AppCard = memo(({ app, index }: { app: App; index: number }) => {
+const AppCard = memo(({ app, index, onDelete }: { app: App; index: number; onDelete: (id: string, name: string) => void }) => {
+  const navigate = useNavigate()
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05, duration: 0.3 }}
-      className="glass rounded-2xl border border-white/50 overflow-hidden hover:shadow-xl transition-all duration-300 hover:-translate-y-1 group"
+      className="glass rounded-2xl border border-white/50 overflow-hidden hover:shadow-xl transition-all duration-300 hover:-translate-y-1 group relative"
     >
       <div className={`h-1.5 bg-gradient-to-r ${COLORS[index % COLORS.length]}`} />
+      
+      {/* Delete Button */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onDelete(app.id, app.app_name)
+        }}
+        className="absolute top-4 right-4 p-2 rounded-xl bg-white/50 text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-50 hover:text-red-600 z-10"
+        title="Delete Application"
+      >
+        <Trash2 className="w-4 h-4" />
+      </button>
+
       <div className="p-5">
         <div className="flex items-start gap-4">
           <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${COLORS[index % COLORS.length]} flex items-center justify-center shrink-0 shadow-md text-white text-lg font-bold`}>
             {app.app_name.substring(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-bold text-surface-900 truncate">{app.app_name}</h3>
+            <h3 className="font-bold text-surface-900 truncate pr-8">{app.app_name}</h3>
             {app.description && (
               <p className="text-xs text-surface-500 mt-0.5 truncate">{app.description}</p>
             )}
-            <code className="text-[10px] text-brand-600 font-mono bg-brand-50 px-1.5 py-0.5 rounded mt-1.5 inline-block">
-              {app.app_id}
-            </code>
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <code className="text-[10px] text-brand-600 font-mono bg-brand-50 px-1.5 py-0.5 rounded inline-block">
+                {app.app_id}
+              </code>
+              <span className="text-[10px] font-medium text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded flex items-center gap-1">
+                <KeyRound className="w-2.5 h-2.5" />
+                {app.keys_count} {app.keys_count === 1 ? 'License' : 'Licenses'}
+              </span>
+            </div>
           </div>
         </div>
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-surface-100">
           <span className="text-xs text-surface-400">
             Created {format(new Date(app.created_at), 'MMM d, yyyy')}
           </span>
-          <button className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1 group-hover:underline">
+          <button 
+            onClick={() => navigate(`/keys?appId=${app.id}`)}
+            className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1 group-hover:underline"
+          >
             View Licenses <ChevronRight className="w-3 h-3" />
           </button>
         </div>
@@ -150,6 +175,8 @@ export default function AppsManager() {
   const [apps, setApps] = useState<App[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
+  const [dateRange, setDateRange] = useState({ start: '', end: '' })
 
   const fetchApps = useCallback(async () => {
     try {
@@ -165,17 +192,90 @@ export default function AppsManager() {
 
   useEffect(() => { fetchApps() }, [fetchApps])
 
+  const handleDelete = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${name}"? It will be moved to history.`)) return
+    try {
+      await api.delete(`/apps/${id}`)
+      toast.success(`"${name}" deleted successfully.`)
+      fetchApps()
+    } catch (err) {
+      console.error('[AppsManager: Delete] Failed:', err)
+      toast.error('Failed to delete application.')
+    }
+  }
+
+  const filteredAndSortedApps = useMemo(() => {
+    let result = [...apps]
+
+    if (sortOrder === 'custom' && dateRange.start && dateRange.end) {
+      const start = startOfDay(new Date(dateRange.start))
+      const end = endOfDay(new Date(dateRange.end))
+      result = result.filter(app => {
+        const date = new Date(app.created_at)
+        return isWithinInterval(date, { start, end })
+      })
+    }
+
+    result.sort((a, b) => {
+      const d1 = new Date(a.created_at).getTime()
+      const d2 = new Date(b.created_at).getTime()
+      return sortOrder === 'oldest' ? d1 - d2 : d2 - d1
+    })
+
+    return result
+  }, [apps, sortOrder, dateRange])
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="page-title">Applications</h1>
           <p className="page-subtitle">Manage your software products. Each app can have multiple company licenses.</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary">
-          <Plus className="w-4 h-4" /> New Application
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 glass px-3 py-1.5 rounded-xl border border-white/40">
+            <Filter className="w-4 h-4 text-surface-400" />
+            <select 
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as any)}
+              className="bg-transparent text-sm font-medium text-surface-700 outline-none cursor-pointer"
+            >
+              <option value="latest">Latest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="custom">Custom Date</option>
+            </select>
+          </div>
+          <button onClick={() => setShowCreate(true)} className="btn-primary">
+            <Plus className="w-4 h-4" /> New App
+          </button>
+        </div>
       </div>
+
+      {sortOrder === 'custom' && (
+        <motion.div 
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="glass p-4 rounded-2xl border border-white/40 flex flex-wrap items-center gap-4"
+        >
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-brand-600" />
+            <span className="text-sm font-medium text-surface-600">Range:</span>
+          </div>
+          <input 
+            type="date" 
+            value={dateRange.start}
+            onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+            className="form-input py-1.5 text-sm max-w-[160px]"
+          />
+          <span className="text-surface-400">to</span>
+          <input 
+            type="date" 
+            value={dateRange.end}
+            onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+            className="form-input py-1.5 text-sm max-w-[160px]"
+          />
+        </motion.div>
+      )}
 
       <CreateAppDrawer 
         isOpen={showCreate} 
@@ -187,19 +287,19 @@ export default function AppsManager() {
         <div className="flex items-center justify-center py-24 text-surface-400">
           <Loader2 className="w-8 h-8 animate-spin" />
         </div>
-      ) : apps.length === 0 ? (
+      ) : filteredAndSortedApps.length === 0 ? (
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }}
           className="text-center py-24 text-surface-400"
         >
           <AppWindow className="w-14 h-14 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">No applications yet.</p>
-          <p className="text-sm">Click <strong>New Application</strong> to create your first product.</p>
+          <p className="font-medium">No applications found.</p>
+          <p className="text-sm">Try adjusting your filters or creating a new application.</p>
         </motion.div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {apps.map((app, i) => (
-            <AppCard key={app.id} app={app} index={i} />
+          {filteredAndSortedApps.map((app, i) => (
+            <AppCard key={app.id} app={app} index={i} onDelete={handleDelete} />
           ))}
         </div>
       )}

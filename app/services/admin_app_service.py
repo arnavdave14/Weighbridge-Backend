@@ -46,6 +46,17 @@ class AdminAppService:
     async def list_apps(db: AsyncSession):
         return await AdminRepo.get_all_apps(db)
 
+    @staticmethod
+    async def delete_app(db: AsyncSession, app_id: uuid.UUID):
+        app = await AdminRepo.get_app_by_uuid(db, app_id)
+        if not app:
+            raise HTTPException(status_code=404, detail="App not found")
+        await AdminRepo.soft_delete_app(db, app)
+
+    @staticmethod
+    async def get_app_history(db: AsyncSession):
+        return await AdminRepo.get_deleted_apps(db)
+
     # ─────────────────────────────────────────
     # ActivationKey (Company License) Operations
     # ─────────────────────────────────────────

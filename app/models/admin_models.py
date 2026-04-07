@@ -20,6 +20,7 @@ class AdminUser(AdminBase):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
+    session_id = Column(String, nullable=True)  # To support single active session
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -36,6 +37,7 @@ class App(AdminBase):
     app_name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     keys = relationship("ActivationKey", back_populates="app", cascade="all, delete-orphan")
@@ -107,3 +109,14 @@ class Notification(AdminBase):
     # Relationships
     app = relationship("App", back_populates="notifications")
     activation_key = relationship("ActivationKey", back_populates="notifications")
+
+
+class AdminOTP(AdminBase):
+    """Temporary storage for admin login OTPs."""
+    __tablename__ = "admin_otps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, index=True, nullable=False)
+    otp = Column(String, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -36,6 +36,14 @@ class Settings:
     SYNC_BATCH_SIZE: int = 50
     BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
     
+    # SMTP CONFIG
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASS: str = os.getenv("SMTP_PASS", "")
+    EMAILS_FROM_EMAIL: str = os.getenv("EMAILS_FROM_EMAIL", SMTP_USER)
+    EMAILS_FROM_NAME: str = os.getenv("EMAILS_FROM_NAME", "Admin Panel")
+    
     # UPLOAD CONFIG
     UPLOAD_DIR: str = "static/uploads"
 

@@ -18,6 +18,7 @@ class AppRead(BaseModel):
     app_name: str
     description: Optional[str]
     created_at: datetime
+    keys_count: int = 0
 
     class Config:
         from_attributes = True
@@ -116,6 +117,15 @@ class NotificationRead(BaseModel):
 class AdminToken(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class AdminOTPVerify(BaseModel):
+    email: str
+    otp: str
+
+
+class OTPResponse(BaseModel):
+    message: str
 
 
 # ─────────────────────────────────────────────

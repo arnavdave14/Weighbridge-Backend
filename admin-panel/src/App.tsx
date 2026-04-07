@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import AppsManager from './pages/AppsManager'
 import KeyManager from './pages/KeyManager'
 import Notifications from './pages/Notifications'
+import AppHistory from './pages/AppHistory'
 import { ToastProvider } from './context/ToastContext'
 import { Toaster } from './components/Toaster'
 
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="apps" element={<AppsManager />} />
+            <Route path="apps/history" element={<AppHistory />} />
             <Route path="keys" element={<KeyManager />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="*" element={<Navigate to="/" replace />} />

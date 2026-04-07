@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.models.admin_models import App, ActivationKey, Notification, AdminUser
+from app.models.admin_models import App, ActivationKey, Notification, AdminUser, AdminOTP
 
 
 class AdminRepo:
@@ -28,7 +28,23 @@ class AdminRepo:
 
     @staticmethod
     async def get_all_apps(db: AsyncSession) -> List[App]:
-        result = await db.execute(select(App).order_by(App.created_at.desc()))
+        stmt = (
+            select(App, func.count(ActivationKey.id).label("keys_count"))
+            .outerjoin(App.keys)
+            .where(App.deleted_at == None)
+            .group_by(App.id)
+            .order_by(App.created_at.desc())
+        )
+        result = await db.execute(stmt)
+        apps_with_counts = []
+        for app, count in result.all():
+            app.keys_count = count
+            apps_with_counts.append(app)
+        return apps_with_counts
+
+    @staticmethod
+    async def get_deleted_apps(db: AsyncSession) -> List[App]:
+        result = await db.execute(select(App).where(App.deleted_at != None).order_by(App.deleted_at.desc()))
         return result.scalars().all()
 
     @staticmethod
@@ -39,8 +55,15 @@ class AdminRepo:
     @staticmethod
     async def get_app_by_app_id_string(db: AsyncSession, app_id_str: str) -> Optional[App]:
         """Lookup by the human-readable app_id string (e.g. WB-APP-XXXX)."""
-        result = await db.execute(select(App).where(App.app_id == app_id_str))
+        result = await db.execute(select(App).where(App.app_id == app_id_str, App.deleted_at == None))
         return result.scalars().first()
+
+    @staticmethod
+    async def soft_delete_app(db: AsyncSession, app: App) -> None:
+        from datetime import datetime, timezone
+        app.deleted_at = datetime.now(timezone.utc)
+        db.add(app)
+        await db.commit()
 
     # ─────────────────────────────────────────
     # ActivationKey Operations
@@ -163,3 +186,40 @@ class AdminRepo:
         await db.commit()
         await db.refresh(admin)
         return admin
+
+    @staticmethod
+    async def update_admin_session(db: AsyncSession, admin: AdminUser, session_id: Optional[str]) -> AdminUser:
+        admin.session_id = session_id
+        db.add(admin)
+        await db.commit()
+        await db.refresh(admin)
+        return admin
+
+    # ─────────────────────────────────────────
+    # Admin OTP Operations
+    # ─────────────────────────────────────────
+
+    @staticmethod
+    async def create_otp(db: AsyncSession, email: str, otp: str, expires_at: datetime) -> AdminOTP:
+        # Delete any existing OTPs for this email first
+        from sqlalchemy import delete
+        await db.execute(delete(AdminOTP).where(AdminOTP.email == email))
+        
+        db_otp = AdminOTP(email=email, otp=otp, expires_at=expires_at)
+        db.add(db_otp)
+        await db.commit()
+        await db.refresh(db_otp)
+        return db_otp
+
+    @staticmethod
+    async def get_otp(db: AsyncSession, email: str, otp: str) -> Optional[AdminOTP]:
+        result = await db.execute(
+            select(AdminOTP)
+            .where(AdminOTP.email == email, AdminOTP.otp == otp)
+        )
+        return result.scalars().first()
+
+    @staticmethod
+    async def delete_otp(db: AsyncSession, otp_record: AdminOTP) -> None:
+        await db.delete(otp_record)
+        await db.commit()
