@@ -115,7 +115,7 @@ async def send_whatsapp(
                 campaign_data = {
                     "campname": f"Receipt_{receipt_id}_{fname}",
                     "mobile": clean_phone,
-                    "msg": message or (f"Receipt {filename}" if filename else "Weighbridge Receipt"),
+                    "msg": message,
                     "pdf": uploaded_path,
                 }
                 
@@ -149,25 +149,23 @@ async def send_whatsapp(
 async def send_whatsapp_message(receipt_id: int, phone: str, **kwargs) -> Dict[str, Any]:
     msg = kwargs.get('message')
     if not msg:
-        slip_no = kwargs.get('slip_no', 'N/A')
-        vehicle = kwargs.get('vehicle', 'N/A')
-        gross = kwargs.get('gross_weight', 0.0)
-        tare = kwargs.get('tare_weight', 0.0)
-        net = kwargs.get('net_weight', gross - tare)
-        date = kwargs.get('date', 'N/A')
-        token = kwargs.get('token', '')
-        msg = (
-            f"📄 *Weighbridge Slip*\n\n"
-            f"Slip No.: {slip_no}\n"
-            f"Vehicle No.: {vehicle}\n"
-            f"Gross Weight: {gross:.2f} kg\n"
-            f"Tare Weight: {tare:.2f} kg\n"
-            f"Net Weight: {net:.2f} kg\n"
-            f"Date: {date}\n\n"
-            f"👉 View/Download PDF: {BASE_URL}/r/{token}"
-        )
-    return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=msg)
+        logger.error(f"[RT-{receipt_id}] Message missing from frontend")
+        return {}
+    
+    await send_whatsapp(phone=phone, receipt_id=receipt_id, message=msg)
+    return {}
 
 async def send_whatsapp_pdf(phone: str, pdf_content: bytes, filename: str, receipt_id: int = 0, caption: Optional[str] = None) -> Dict[str, Any]:
     return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=caption, pdf_content=pdf_content, filename=filename)
 
+async def send_license_whatsapp(phone: str, key_data: Dict[str, Any], app_name: str) -> Dict[str, Any]:
+    """
+    Sends a WhatsApp message containing the content provided in key_data['message'].
+    """
+    msg = key_data.get('message')
+    if not msg:
+        logger.error(f"License WhatsApp skipped: No message content provided.")
+        return {}
+
+    await send_whatsapp(phone=phone, message=msg)
+    return {}

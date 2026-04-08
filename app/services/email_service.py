@@ -81,7 +81,41 @@ async def send_email_receipt(
         return {"status": "failed", "reason": str(e)}
 
 def _send_sync(msg):
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+    # Added 15 second timeout for production safety
+    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
         server.starttls()
         server.login(settings.SMTP_USER, settings.SMTP_PASS)
         server.send_message(msg)
+
+async def send_license_email(email: str, key_data: Dict[str, Any], app_name: str) -> Dict[str, Any]:
+    """
+    Sends a license email with raw subject and body provided by the frontend.
+    """
+    if not email or not key_data:
+        logger.warning(f"License Email skipped: Config or Target missing.")
+        return {}
+
+    subject = key_data.get('subject')
+    body = key_data.get('body')
+
+    if not subject or not body:
+        logger.error(f"License Email to {email} skipped: Missing subject or body.")
+        return {}
+
+    msg = MIMEMultipart()
+    msg['From'] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+    msg['To'] = email
+    msg['Subject'] = subject
+    msg['Reply-To'] = settings.EMAILS_FROM_EMAIL
+    msg['X-Mailer'] = "Weighbridge-Production-Mailer"
+    
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        # Running sync smtplib in a thread
+        await asyncio.to_thread(_send_sync, msg)
+        logger.info(f"✅ License Email sent successfully to {email}")
+        return {}
+    except Exception as e:
+        logger.error(f"License Email failed for {email}: {str(e)}")
+        return {"status": "failed", "reason": str(e)}

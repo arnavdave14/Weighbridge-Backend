@@ -20,10 +20,14 @@ class Settings:
     DB_MODE: str = os.getenv("DB_MODE", "dual")  # dual / local / postgres
     SQLITE_PATH: str = os.getenv("SQLITE_PATH", "./data/app.db")
     POSTGRES_URL: str = os.getenv("POSTGRES_URL")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # Legacy fallbacks
     DATABASE_URL: str = os.getenv("DATABASE_URL")
     REMOTE_DATABASE_URL: str = os.getenv("REMOTE_DATABASE_URL")
+    
+    # RATE LIMITING
+    NOTIFICATION_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("NOTIFICATION_RATE_LIMIT_PER_MINUTE", "10"))
     
     # WHATSAPP CONFIG
     DIGITALSMS_API_KEY: str = os.getenv("DIGITALSMS_API_KEY")

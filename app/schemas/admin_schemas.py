@@ -24,6 +24,15 @@ class AppRead(BaseModel):
         from_attributes = True
 
 
+class CustomLabel(BaseModel):
+    name: str
+    type: str = "text"  # text, alphanumeric, alphabetical, numeric, date
+    required: bool = False
+
+    class Config:
+        from_attributes = True
+
+
 # ─────────────────────────────────────────────
 # ActivationKey Schemas (Company License Level)
 # ─────────────────────────────────────────────
@@ -43,10 +52,15 @@ class ActivationKeyCreate(BaseModel):
     phone: Optional[str] = None
     mobile_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
-    labels: Optional[List[str]] = []
+    labels: Optional[List[CustomLabel]] = []
     bill_header_1: Optional[str] = None
     bill_header_2: Optional[str] = None
     bill_header_3: Optional[str] = None
+    # Notification / Messaging - Frontend Controlled
+    message: Optional[str] = None  # For WhatsApp
+    subject: Optional[str] = None  # For Email
+    body: Optional[str] = None     # For Email
+
     bill_footer: Optional[str] = None
 
 
@@ -73,6 +87,7 @@ class ActivationKeyRead(BaseModel):
     id: UUID4
     app_id: UUID4
     token: str
+    labels: Optional[List[CustomLabel]] = []
     status: str
     expiry_date: datetime
     created_at: datetime
@@ -108,6 +123,26 @@ class NotificationRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ─────────────────────────────────────────────
+# Failed Notification (DLQ) Schemas
+# ─────────────────────────────────────────────
+
+class FailedNotificationRead(BaseModel):
+    id: UUID4
+    channel: str
+    target: str
+    payload: dict
+    error_reason: Optional[str]
+    retry_count: str
+    status: str
+    failed_at: datetime
+    resolved_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
 
 
 # ─────────────────────────────────────────────

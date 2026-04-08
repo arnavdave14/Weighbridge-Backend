@@ -71,7 +71,9 @@ class ReceiptResponse(ReceiptBase):
 class SyncResponse(BaseModel):
     synced: int
     failed: int
+    duplicates: int = 0
     errors: Optional[List[str]] = None
+    error_map: Optional[Dict[int, Dict[str, str]]] = None # local_id -> {field: error}
 
 # Auth Schemas
 class Token(BaseModel):

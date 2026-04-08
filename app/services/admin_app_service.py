@@ -3,7 +3,7 @@ Admin App Service — Business logic for App and ActivationKey management.
 """
 import uuid
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.admin_repo import AdminRepo
 from app.schemas.admin_schemas import AppCreate, ActivationKeyCreate, ActivationKeyUpdate
 from app.core.security import get_password_hash, verify_password
+from app.models.admin_models import ActivationKeySchema
+from app.core.validation_engine import get_etag
 
 
 def _generate_app_id() -> str:
@@ -101,12 +103,27 @@ class AdminAppService:
                 bill_footer=key_in.bill_footer,
             )
 
+            # Create Version 1 of Schema
+            initial_labels = key_in.labels or []
+            schema_v1 = ActivationKeySchema(
+                activation_key_id=db_key.id,
+                version=1,
+                labels=initial_labels,
+                etag=get_etag(initial_labels)
+            )
+            db.add(schema_v1)
+
             generated.append({
                 "id": str(db_key.id),
                 "raw_activation_key": raw_key,   # Shown to admin ONCE — never stored plain
                 "company_name": db_key.company_name,
                 "expiry_date": db_key.expiry_date.isoformat(),
                 "status": db_key.status,
+                "email": db_key.email,
+                "whatsapp_number": db_key.whatsapp_number,
+                "message": key_in.message,
+                "subject": key_in.subject,
+                "body": key_in.body,
             })
 
         return generated
@@ -120,8 +137,40 @@ class AdminAppService:
 
         update_data = update_in.model_dump(exclude_unset=True)
 
+        # Versioning Trigger: If labels change, increment version and create snapshot
+        if "labels" in update_data and update_data["labels"] != key.labels:
+            key.current_version += 1
+            new_labels = update_data["labels"]
+            
+            new_schema_version = ActivationKeySchema(
+                activation_key_id=key.id,
+                version=key.current_version,
+                labels=new_labels,
+                etag=get_etag(new_labels)
+            )
+            db.add(new_schema_version)
+
         for field, value in update_data.items():
             setattr(key, field, value)
+
+        return await AdminRepo.update_key(db, key)
+
+    @staticmethod
+    async def rotate_token(db: AsyncSession, key_id: uuid.UUID):
+        """
+        Rotates the machine token with a 1-hour grace period for the previous token.
+        """
+        key = await AdminRepo.get_key_by_uuid(db, key_id)
+        if not key:
+            raise HTTPException(status_code=404, detail="Activation key not found")
+
+        # Set grace period for old token
+        key.previous_token_hash = key.token # Storing raw token as 'hash' for simplicity
+        key.token_rotation_grace_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+        
+        # Generate new token
+        key.token = secrets.token_urlsafe(48)
+        key.token_updated_at = datetime.now(timezone.utc)
 
         return await AdminRepo.update_key(db, key)
 

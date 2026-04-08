@@ -3,13 +3,13 @@ Admin Repository — all DB access for the SaaS admin system.
 Strictly uses PostgreSQL sessions (remote_db / get_remote_db).
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.models.admin_models import App, ActivationKey, Notification, AdminUser, AdminOTP
+from app.models.admin_models import App, ActivationKey, Notification, AdminUser, AdminOTP, ActivationKeySchema, MachineNonce, FailedNotification
 
 
 class AdminRepo:
@@ -124,6 +124,37 @@ class AdminRepo:
         return db_key
 
     @staticmethod
+    async def get_key_by_token(db: AsyncSession, token: str) -> Optional[ActivationKey]:
+        result = await db.execute(select(ActivationKey).where(ActivationKey.token == token))
+        return result.scalars().first()
+
+    @staticmethod
+    async def get_key_by_previous_token(db: AsyncSession, token_hash: str) -> Optional[ActivationKey]:
+        """Support for rotation grace period."""
+        result = await db.execute(select(ActivationKey).where(ActivationKey.previous_token_hash == token_hash))
+        return result.scalars().first()
+
+    @staticmethod
+    async def get_schema_by_version(db: AsyncSession, key_id: uuid.UUID, version: int) -> Optional[ActivationKeySchema]:
+        result = await db.execute(
+            select(ActivationKeySchema)
+            .where(
+                ActivationKeySchema.activation_key_id == key_id,
+                ActivationKeySchema.version == version
+            )
+        )
+        return result.scalars().first()
+
+    @staticmethod
+    async def get_latest_schema(db: AsyncSession, key_id: uuid.UUID) -> Optional[ActivationKeySchema]:
+        result = await db.execute(
+            select(ActivationKeySchema)
+            .where(ActivationKeySchema.activation_key_id == key_id)
+            .order_by(ActivationKeySchema.version.desc())
+        )
+        return result.scalars().first()
+
+    @staticmethod
     async def count_keys_by_status(db: AsyncSession) -> dict:
         result = await db.execute(
             select(ActivationKey.status, func.count(ActivationKey.id))
@@ -223,3 +254,66 @@ class AdminRepo:
     async def delete_otp(db: AsyncSession, otp_record: AdminOTP) -> None:
         await db.delete(otp_record)
         await db.commit()
+
+    # ─────────────────────────────────────────
+    # Failed Notifications (DLQ)
+    # ─────────────────────────────────────────
+
+    @staticmethod
+    async def create_dlq_entry(
+        db: AsyncSession,
+        channel: str,
+        target: str,
+        payload: dict,
+        error: str,
+        retry_count: int
+    ) -> FailedNotification:
+        from app.models.admin_models import FailedNotification
+        entry = FailedNotification(
+            channel=channel,
+            target=target,
+            payload=payload,
+            error_reason=error,
+            retry_count=str(retry_count), # matches the model's current String type
+            status="pending"
+        )
+        db.add(entry)
+        await db.commit()
+        await db.refresh(entry)
+        return entry
+
+    @staticmethod
+    async def get_dlq_entries(
+        db: AsyncSession,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[FailedNotification]:
+        from app.models.admin_models import FailedNotification
+        stmt = select(FailedNotification).order_by(FailedNotification.failed_at.desc())
+        
+        if channel:
+            stmt = stmt.where(FailedNotification.channel == channel)
+        if status:
+            stmt = stmt.where(FailedNotification.status == status)
+            
+        result = await db.execute(stmt.limit(limit).offset(offset))
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_dlq_entry_by_id(db: AsyncSession, entry_id: uuid.UUID) -> Optional[FailedNotification]:
+        from app.models.admin_models import FailedNotification
+        result = await db.execute(select(FailedNotification).where(FailedNotification.id == entry_id))
+        return result.scalars().first()
+
+    @staticmethod
+    async def update_dlq_status(db: AsyncSession, entry: FailedNotification, status: str) -> FailedNotification:
+        entry.status = status
+        if status in ["resolved", "retried"]:
+            entry.resolved_at = datetime.now(timezone.utc)
+        db.add(entry)
+        await db.commit()
+        await db.refresh(entry)
+        return entry
+

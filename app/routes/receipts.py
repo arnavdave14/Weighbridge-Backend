@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile, Form, Header
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,9 @@ from app.database.postgres import remote_session
 from app.schemas.schemas import ReceiptSync, SyncResponse
 from app.services.sync_service import SyncService
 from app.services.receipt_service import ReceiptService
+from app.services.config_service import ConfigService
+from app.api.machine_deps import verify_apex_identity
+from app.models.admin_models import ActivationKey
 from app.core import security
 import os
 
@@ -20,14 +23,45 @@ templates = Jinja2Templates(directory="app/templates")
 @router.post("/sync/receipts", response_model=SyncResponse, tags=["Sync"])
 async def sync_receipts(
     sync_data: ReceiptSync,
+    x_schema_version: int = Header(..., alias="X-Schema-Version"),
+    activation_key: ActivationKey = Depends(verify_apex_identity),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Offline-first sync endpoint for Flutter app.
-    Batch receipts for a given machine_id.
-    Prevents duplicates based on (machine_id, local_id).
+    APEX-TIER SECURE SYNC:
+    - Validates HMAC-SHA256 signature of the batch.
+    - Enforced by verify_apex_identity (Nonce/Timestamp/Signature).
+    - Performs atomic batch validation against specific schema version.
     """
-    return await SyncService.process_batch_sync(db, sync_data)
+    return await SyncService.process_batch_sync(
+        db=db, 
+        sync_data=sync_data, 
+        activation_key=activation_key,
+        schema_version=x_schema_version
+    )
+
+@router.get("/sync/config", tags=["Sync"])
+async def get_machine_config(
+    request: Request,
+    response: Response,
+    activation_key: ActivationKey = Depends(verify_apex_identity),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Pulls latest branding and label configuration.
+    Supports ETags for bandwidth efficiency.
+    """
+    config = await ConfigService.get_machine_config(db, activation_key)
+    
+    # ETag Support
+    etag = config.get("etag")
+    if_none_match = request.headers.get("If-None-Match")
+    
+    if if_none_match == etag:
+        return Response(status_code=304)
+        
+    response.headers["ETag"] = etag
+    return config
 
 @router.get("/r/{share_token}", response_class=HTMLResponse, tags=["Public"])
 async def public_preview(

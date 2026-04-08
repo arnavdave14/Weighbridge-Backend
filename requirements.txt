@@ -13,3 +13,9 @@ passlib[bcrypt]
 python-jose[cryptography]
 python-dateutil
 aiosqlite
+celery
+redis
+prometheus-fastapi-instrumentator
+prometheus-client
+requests
+fpdf2

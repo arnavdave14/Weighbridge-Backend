@@ -12,6 +12,7 @@ from app.schemas.admin_schemas import (
 )
 from app.services.admin_app_service import AdminAppService
 from app.repositories.admin_repo import AdminRepo
+from app.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/admin/apps", tags=["Admin — Apps"])
 
@@ -94,8 +95,41 @@ async def generate_activation_keys(
     """
     Generate one or more activation keys for a specific App.
     Each key = one company license. Raw keys shown ONCE — save them.
+    Asynchronously triggers email and WhatsApp notifications.
     """
-    return await AdminAppService.generate_keys(db, key_in)
+    generated_keys = await AdminAppService.generate_keys(db, key_in)
+    
+    app_data = await AdminRepo.get_app_by_uuid(db, key_in.app_id)
+    app_name = app_data.app_name if app_data else "Weighbridge Software"
+    
+    # Pre-validate to determine the synchronous status message safely
+    is_valid_email, is_valid_phone = NotificationService.validate_contact_info(
+        key_in.email, key_in.whatsapp_number
+    )
+    
+    if is_valid_email and is_valid_phone:
+        status_msg = "queued"
+    elif is_valid_email:
+        status_msg = "queued_for_email_only"
+    elif is_valid_phone:
+        status_msg = "queued_for_whatsapp_only"
+    elif key_in.email or key_in.whatsapp_number:
+        status_msg = "validation_failed"
+    else:
+        status_msg = "skipped"
+
+    for key_data in generated_keys:
+        key_data["notification_status"] = status_msg
+        
+        # Dispatch Celery background task for robust delivery via Redis queue
+        if is_valid_email or is_valid_phone:
+            from app.tasks.notification_tasks import send_notification_task
+            send_notification_task.delay(
+                key_data=key_data,
+                app_name=app_name
+            )
+
+    return generated_keys
 
 
 @router.get("/{app_uuid}/keys", response_model=List[ActivationKeyRead])
@@ -119,22 +153,35 @@ async def list_all_keys(
     return await AdminRepo.get_all_keys(db, limit=limit, offset=offset)
 
 
-@router.put("/keys/{key_id}", response_model=ActivationKeyRead)
-async def update_activation_key(
-    key_id: uuid.UUID,
+@router.patch("/keys/{key_uuid}/rotate-token")
+async def rotate_key_token(
+    key_uuid: uuid.UUID,
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
+):
+    """
+    Rotates the machine token for a license.
+    Includes a 1-hour grace period for the old token to prevent sync interruptions.
+    """
+    return await AdminAppService.rotate_token(db, key_uuid)
+
+
+@router.patch("/keys/{key_uuid}")
+async def update_key_details(
+    key_uuid: uuid.UUID,
     update_in: ActivationKeyUpdate,
     db: AsyncSession = Depends(get_remote_db),
     _: dict = Depends(get_current_admin)
 ):
-    """Update company details, billing configuration, expiry, or status."""
-    return await AdminAppService.update_key(db, key_id, update_in)
+    """Updates license metadata, branding, or custom labels."""
+    return await AdminAppService.update_key(db, key_uuid, update_in)
 
 
-@router.delete("/keys/{key_id}/revoke", response_model=ActivationKeyRead)
+@router.delete("/keys/{key_uuid}")
 async def revoke_key(
-    key_id: uuid.UUID,
+    key_uuid: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
     _: dict = Depends(get_current_admin)
 ):
-    """Permanently revoke a license key."""
-    return await AdminAppService.revoke_key(db, key_id)
+    """Permanently revokes a license key."""
+    return await AdminAppService.revoke_key(db, key_uuid)
