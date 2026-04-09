@@ -48,6 +48,10 @@ class ReceiptBase(BaseModel):
     # Flutter sends images as Base64 strings. Backend decodes → raw bytes → SQLite BLOB.
     # Base64 strings are NEVER stored in the database directly.
     images_base64: Optional[List[str]] = []
+    # Employee linkage: set by Flutter from the logged-in employee's JWT.
+    # Optional for backward compatibility — existing clients not sending this
+    # field will produce receipts with user_id = NULL (still valid).
+    user_id: Optional[str] = None
 
 
 class ReceiptCreate(ReceiptBase):

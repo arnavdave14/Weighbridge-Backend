@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts
+from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts, employee_auth
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
@@ -9,6 +9,9 @@ from app.database.base import Base
 from app.models.models import (
     Machine, Receipt, ReceiptImage, License, SyncLog, SyncQueue
 )
+# Employee model must be imported before create_all() so SQLAlchemy
+# registers the 'employees' table in Base.metadata for both SQLite and PostgreSQL.
+from app.models.employee_model import Employee  # noqa: F401
 from app.sync.sync_worker import run_sync_worker_loop
 from app.config.settings import settings
 import uvicorn
@@ -47,6 +50,9 @@ app.include_router(notifications.router)
 app.include_router(admin_branding.router)
 app.include_router(admin_dlq.router)
 app.include_router(admin_receipts.router)
+
+# Employee Auth (device-facing + admin employee management)
+app.include_router(employee_auth.router)
 
 # Static Files
 app.mount("/static", StaticFiles(directory="static"), name="static")

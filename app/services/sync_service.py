@@ -126,7 +126,10 @@ class SyncService:
                     custom_data=normalized_data,
                     share_token=str(uuid.uuid4())[:12],
                     whatsapp_status="pending",
-                    is_synced=False
+                    is_synced=False,
+                    # Employee linkage: pass through if provided by Flutter client.
+                    # NULL if not provided — backward-compatible.
+                    user_id=r_schema.user_id or None,
                 )
                 valid_receipt_objects.append(new_receipt)
 

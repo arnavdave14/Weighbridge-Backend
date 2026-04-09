@@ -1,7 +1,7 @@
 import { NavLink, Outlet, Navigate } from 'react-router-dom'
 import { useAuthStore } from '../store/useStore'
 import {
-  LayoutDashboard, AppWindow, KeyRound, Bell, LogOut, Scale, History, AlertTriangle, ClipboardList
+  LayoutDashboard, AppWindow, KeyRound, Bell, LogOut, Scale, History, AlertTriangle, ClipboardList, Users
 } from 'lucide-react'
 
 const NAV = [
@@ -12,6 +12,7 @@ const NAV = [
   { to: '/notifications', icon: Bell, label: 'Alerts' },
   { to: '/dlq', icon: AlertTriangle, label: 'Failed Notifications' },
   { to: '/receipts', icon: ClipboardList, label: 'Receipts' },
+  { to: '/employees', icon: Users, label: 'Employees' },
 ]
 
 export default function Layout() {

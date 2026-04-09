@@ -64,12 +64,18 @@ class Receipt(Base):
     share_token = Column(String, unique=True, index=True, nullable=False)
     whatsapp_status = Column(String, default="pending", nullable=False)
     
+    # Employee linkage — stores Employee.id (UUID as String).
+    # NULL for receipts created before employee auth was introduced.
+    # Indexed for fast admin panel filtering by employee.
+    # No FK constraint → cross-DB safe (Employee in Base, same as Receipt).
+    user_id = Column(String(36), nullable=True, index=True)
+
     # Sync status
     is_synced = Column(Boolean, default=False, index=True)
     sync_attempts = Column(Integer, default=0)
     last_error = Column(Text, nullable=True)
     synced_at = Column(DateTime(timezone=True), nullable=True)
-    
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

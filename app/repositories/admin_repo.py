@@ -328,6 +328,7 @@ from sqlalchemy import asc, desc, and_, cast, String
 
 from app.models.models import Receipt, Machine
 from app.models.admin_models import ActivationKey, App
+from app.models.employee_model import Employee
 
 
 class AdminReceiptRepo:
@@ -361,10 +362,15 @@ class AdminReceiptRepo:
                 ActivationKey.status.label("ak_status"),
                 App.app_name.label("app_name"),
                 App.app_id.label("app_id_str"),
+                # Employee enrichment — NULL for pre-auth receipts
+                Employee.name.label("employee_name"),
+                Employee.username.label("employee_username"),
             )
             .join(Machine, Receipt.machine_id == Machine.machine_id, isouter=True)
             .join(ActivationKey, Machine.key_id == ActivationKey.token, isouter=True)
             .join(App, ActivationKey.app_id == App.id, isouter=True)
+            # LEFT OUTER JOIN on Employee so receipts without user_id still appear
+            .join(Employee, Receipt.user_id == Employee.id, isouter=True)
         )
 
         conditions = []
@@ -416,7 +422,7 @@ class AdminReceiptRepo:
 
     @staticmethod
     async def get_receipt_by_id(db: AsyncSession, receipt_id: int):
-        """Single receipt with tenant enrichment."""
+        """Single receipt with full tenant + employee enrichment."""
         stmt = (
             select(
                 Receipt,
@@ -424,10 +430,13 @@ class AdminReceiptRepo:
                 ActivationKey.status.label("ak_status"),
                 App.app_name.label("app_name"),
                 App.app_id.label("app_id_str"),
+                Employee.name.label("employee_name"),
+                Employee.username.label("employee_username"),
             )
             .join(Machine, Receipt.machine_id == Machine.machine_id, isouter=True)
             .join(ActivationKey, Machine.key_id == ActivationKey.token, isouter=True)
             .join(App, ActivationKey.app_id == App.id, isouter=True)
+            .join(Employee, Receipt.user_id == Employee.id, isouter=True)
             .where(Receipt.id == receipt_id)
         )
         result = await db.execute(stmt)

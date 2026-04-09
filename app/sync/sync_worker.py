@@ -156,6 +156,8 @@ async def _sync_receipt(local_db: AsyncSession, receipt_id: int) -> bool:
                 image_urls=receipt.image_urls,
                 share_token=receipt.share_token,
                 whatsapp_status=receipt.whatsapp_status,
+                # Employee linkage — preserved through sync (NULL for pre-auth receipts).
+                user_id=receipt.user_id,
                 created_at=receipt.created_at,
                 updated_at=receipt.updated_at
             ).on_conflict_do_update(
@@ -167,6 +169,8 @@ async def _sync_receipt(local_db: AsyncSession, receipt_id: int) -> bool:
                     "custom_data": receipt.custom_data,
                     "image_urls": receipt.image_urls,
                     "whatsapp_status": receipt.whatsapp_status,
+                    # user_id: update if the PG row currently has NULL (backfill on re-sync)
+                    "user_id": receipt.user_id,
                     "updated_at": receipt.updated_at
                 }
             )

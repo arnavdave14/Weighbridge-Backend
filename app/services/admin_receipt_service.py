@@ -51,7 +51,9 @@ def _extract_truck_no(custom_data: dict) -> Optional[str]:
 def _row_to_receipt(row) -> ReceiptAdminRead:
     """
     Converts a SQLAlchemy named-tuple row (from multi-column SELECT) to
-    ReceiptAdminRead. The row is: (Receipt, ak_company, ak_status, app_name, app_id_str).
+    ReceiptAdminRead.
+    Row columns: Receipt, ak_company, ak_status, app_name, app_id_str,
+                 employee_name, employee_username
     """
     receipt = row.Receipt
     custom_data = receipt.custom_data or {}
@@ -77,11 +79,15 @@ def _row_to_receipt(row) -> ReceiptAdminRead:
         last_error=receipt.last_error,
         synced_at=receipt.synced_at,
         created_at=receipt.created_at,
-        # Enriched tenant fields (may be None for legacy machines with no key_id)
+        # Tenant enrichment (None for legacy machines with no key_id)
         app_name=getattr(row, "app_name", None),
         app_id_str=getattr(row, "app_id_str", None),
         company_name=getattr(row, "ak_company", None),
         key_status=getattr(row, "ak_status", None),
+        # Employee enrichment (None for pre-auth receipts without user_id)
+        user_id=getattr(receipt, "user_id", None),
+        employee_name=getattr(row, "employee_name", None),
+        employee_username=getattr(row, "employee_username", None),
     )
 
 

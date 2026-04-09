@@ -261,6 +261,11 @@ class ReceiptAdminRead(BaseModel):
     company_name: Optional[str] = None
     key_status: Optional[str] = None       # active | expired | revoked
 
+    # Employee enrichment (from JOIN — None for pre-auth receipts)
+    user_id: Optional[str] = None          # Employee.id (UUID string)
+    employee_name: Optional[str] = None    # Employee.name — shown in admin table
+    employee_username: Optional[str] = None  # Employee.username — for cross-reference
+
     class Config:
         from_attributes = True
 

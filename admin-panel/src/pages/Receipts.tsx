@@ -16,7 +16,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ClipboardList, Search, Filter, RefreshCw, ChevronLeft, ChevronRight,
   CheckCircle2, Clock, X, ArrowUpDown, ChevronDown,
-  Truck, Scale, Building2, AppWindow, Cpu, Calendar,
+  Truck, Scale, Building2, AppWindow, Cpu, Calendar, Users
 } from 'lucide-react'
 import api from '../services/api'
 import { format } from 'date-fns'
@@ -50,6 +50,9 @@ interface Receipt {
   app_id_str?: string
   company_name?: string
   key_status?: string
+  user_id?: string
+  employee_name?: string
+  employee_username?: string
 }
 
 interface PaginatedResponse {
@@ -408,6 +411,7 @@ export default function Receipts() {
                 <th className="flex items-center gap-1"><AppWindow className="w-3.5 h-3.5" /> App</th>
                 <th className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> Customer</th>
                 <th className="flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> Machine</th>
+                <th className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Operator</th>
                 <th>Sync</th>
               </tr>
             </thead>
@@ -465,6 +469,11 @@ export default function Receipts() {
                     <td>
                       <span className="text-[11px] font-mono text-surface-500 max-w-[100px] truncate block">
                         {r.machine_id}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="text-xs font-medium text-surface-700">
+                        {r.employee_name || <span className="text-surface-300 italic">None</span>}
                       </span>
                     </td>
                     <td><SyncBadge synced={r.is_synced} /></td>
@@ -577,6 +586,7 @@ function ReceiptDetailPanel({ receipt, onClose }: { receipt: Receipt; onClose: (
               { icon: Scale, label: 'Date & Time', value: format(new Date(receipt.date_time), 'dd MMM yyyy, HH:mm:ss') },
               { icon: Cpu, label: 'Machine', value: receipt.machine_id },
               { icon: Building2, label: 'Customer', value: receipt.company_name || '—' },
+              { icon: Users, label: 'Operator', value: receipt.employee_name ? `${receipt.employee_name} (@${receipt.employee_username})` : '—' },
               { icon: AppWindow, label: 'Application', value: receipt.app_name || '—' },
             ].map(({ icon: Icon, label, value }) => (
               <div key={label} className="flex items-center gap-3 p-3 rounded-xl bg-surface-50 border border-surface-100">
