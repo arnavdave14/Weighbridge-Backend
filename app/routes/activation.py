@@ -26,10 +26,12 @@ async def verify_hardware_key(
     2. Hash-compare raw key against all stored bcrypt hashes.
     3. Ensure the matched key belongs to the requested App (cross-tenant check).
     4. Verify status is 'active' and expiry has not passed.
-    5. Return all company-specific configuration if valid.
+    5. If machine_id is provided, pre-register Machine in PostgreSQL with key_id.
+    6. Return all company-specific configuration if valid.
     """
     return await AdminAppService.verify_hardware_activation(
         db=db,
         raw_key=req.activation_key,
-        requested_app_id_str=req.app_id
+        requested_app_id_str=req.app_id,
+        machine_id=req.machine_id,    # GAP-1: pass through optional machine_id
     )

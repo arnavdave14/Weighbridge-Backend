@@ -168,9 +168,20 @@ class OTPResponse(BaseModel):
 # ─────────────────────────────────────────────
 
 class HardwareActivationRequest(BaseModel):
-    """Sent by weighbridge device to activate against a specific App."""
+    """Sent by weighbridge device to activate against a specific App.
+
+    GAP-1 FIX: machine_id is optional. If provided, the server immediately
+    pre-registers the Machine in PostgreSQL with key_id set, so tenant
+    enrichment in the admin panel works from the very first receipt sync —
+    no separate machine-sync step required.
+
+    Backward-compatible: existing devices not sending machine_id receive
+    the same response as before; the new upsert path is completely skipped.
+    """
     activation_key: str   # Raw WB-XXXX-XXXX-XXXX string
     app_id: str           # The app_id string (e.g. WB-APP-XXXX) user selects on device
+    machine_id: Optional[str] = None  # Optional: device's own machine identifier
+
 
 
 class HardwareActivationResponse(BaseModel):
@@ -203,3 +214,77 @@ class DashboardStats(BaseModel):
     expired_keys: int
     revoked_keys: int
     recent_notifications: int
+
+
+# ─────────────────────────────────────────────
+# Receipts Admin Viewer Schemas
+# ─────────────────────────────────────────────
+
+from enum import Enum
+
+
+class SortField(str, Enum):
+    created_at = "created_at"
+    gross_weight = "gross_weight"
+    tare_weight = "tare_weight"
+    date_time = "date_time"
+
+
+class SortDir(str, Enum):
+    asc = "asc"
+    desc = "desc"
+
+
+class ReceiptAdminRead(BaseModel):
+    """Enriched receipt row returned to the Admin Panel."""
+    id: int
+    local_id: int
+    machine_id: str
+    date_time: datetime
+    gross_weight: float
+    tare_weight: float
+    net_weight: float           # Computed: gross - tare
+    rate: Optional[float]
+    truck_no: Optional[str]     # Extracted from custom_data JSON
+    custom_data: dict           # Full dynamic fields (labels)
+    share_token: str
+    whatsapp_status: str
+    is_synced: bool
+    sync_attempts: int
+    last_error: Optional[str]
+    synced_at: Optional[datetime]
+    created_at: datetime
+
+    # Enriched tenant fields (from JOIN — may be None for legacy machines)
+    app_name: Optional[str] = None
+    app_id_str: Optional[str] = None       # e.g. "WB-APP-XXXX"
+    company_name: Optional[str] = None
+    key_status: Optional[str] = None       # active | expired | revoked
+
+    class Config:
+        from_attributes = True
+
+
+class PaginatedReceiptsResponse(BaseModel):
+    """Pagination envelope for all receipt list endpoints."""
+    total: int
+    page: int
+    limit: int
+    pages: int
+    items: List[ReceiptAdminRead]
+
+
+class MachineAdminRead(BaseModel):
+    """Machine summary for drill-down navigation."""
+    id: int
+    machine_id: str
+    name: Optional[str]
+    location: Optional[str]
+    is_active: bool
+    is_synced: bool
+    last_sync_at: Optional[datetime]
+    receipt_count: int = 0          # Aggregated JOINed count
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

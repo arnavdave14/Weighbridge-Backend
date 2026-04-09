@@ -31,7 +31,13 @@ class Machine(Base):
     last_sync_at = Column(DateTime(timezone=True), nullable=True)
     settings = Column(JSON, nullable=True)
     is_active = Column(Boolean, default=True)
-    
+
+    # Tenant linkage: stores ActivationKey.token (String, not UUID FK)
+    # Avoids cross-DB FK issue — Machine lives in Base (SQLite+PG),
+    # ActivationKey lives in AdminBase (PG only).
+    # Populated during hardware activation. NULL for pre-existing machines.
+    key_id = Column(String, nullable=True, index=True)
+
     # New Sync Fields
     is_synced = Column(Boolean, default=False, index=True)
     sync_attempts = Column(Integer, default=0)

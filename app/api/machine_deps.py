@@ -52,17 +52,14 @@ async def verify_apex_identity(
         )
 
     # 3. Identify Machine & Fetch Token
-    # We look up the ActivationKey using the Machine-ID linked in Licenses
-    # For now, we'll assume the Machine-ID is associated with exactly one active ActivationKey.
-    # We fetch it from the admin repo.
-    # Note: In a real system, you'd have a mapping table. 
-    # Here, we'll find the ActivationKey where status='active' for this machine.
-    key = await AdminRepo.get_key_by_token(db, machine_id) # Using Machine-ID as primary token for now
-    if not key:
-        # Check for previous token if rotation happened recently
-        # We hash the incoming token for comparison if we were storing hashes
-        key = await AdminRepo.get_key_by_token(db, machine_id) 
-    
+    # Note: `get_db` (SQLite) is intentionally used here for device-facing auth.
+    # The Machine-ID header carries the ActivationKey.token, which the device
+    # received during hardware activation. AdminRepo.get_key_by_token looks it up
+    # from the local SQLite session for offline-resilient HMAC validation.
+    #
+    # GAP-3 FIX: Removed duplicate identical call that wasted a DB round-trip.
+    key = await AdminRepo.get_key_by_token(db, machine_id)
+
     if not key or key.status != "active":
         NonceManager.record_failure(machine_id)
         raise HTTPException(

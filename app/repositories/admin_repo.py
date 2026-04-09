@@ -317,3 +317,154 @@ class AdminRepo:
         await db.refresh(entry)
         return entry
 
+
+# ═══════════════════════════════════════════════════════════════════
+# AdminReceiptRepo — receipt queries for the Admin Panel.
+# Always reads from PostgreSQL (remote_db). Never touches SQLite.
+# ═══════════════════════════════════════════════════════════════════
+
+import math
+from sqlalchemy import asc, desc, and_, cast, String
+
+from app.models.models import Receipt, Machine
+from app.models.admin_models import ActivationKey, App
+
+
+class AdminReceiptRepo:
+
+    @staticmethod
+    async def get_receipts(
+        db: AsyncSession,
+        *,
+        app_uuid: Optional[uuid.UUID] = None,
+        key_token: Optional[str] = None,
+        machine_id: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        is_synced: Optional[bool] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 50,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+    ):
+        """
+        Paginated receipt listing with LEFT OUTER JOINs:
+          Receipt → Machine (machine_id) → ActivationKey (token) → App (id)
+        All JOINs are outer so receipts with no tenant still appear.
+        Returns (rows, total_count).
+        """
+        base_stmt = (
+            select(
+                Receipt,
+                ActivationKey.company_name.label("ak_company"),
+                ActivationKey.status.label("ak_status"),
+                App.app_name.label("app_name"),
+                App.app_id.label("app_id_str"),
+            )
+            .join(Machine, Receipt.machine_id == Machine.machine_id, isouter=True)
+            .join(ActivationKey, Machine.key_id == ActivationKey.token, isouter=True)
+            .join(App, ActivationKey.app_id == App.id, isouter=True)
+        )
+
+        conditions = []
+
+        if machine_id:
+            conditions.append(Receipt.machine_id == machine_id)
+        if key_token:
+            conditions.append(Machine.key_id == key_token)
+        if app_uuid:
+            conditions.append(App.id == app_uuid)
+        if date_from:
+            conditions.append(Receipt.date_time >= date_from)
+        if date_to:
+            conditions.append(Receipt.date_time <= date_to)
+        if is_synced is not None:
+            conditions.append(Receipt.is_synced == is_synced)
+        if search:
+            conditions.append(
+                cast(Receipt.custom_data, String).ilike(f"%{search}%")
+            )
+
+        if conditions:
+            base_stmt = base_stmt.where(and_(*conditions))
+
+        # Count total rows (without pagination)
+        count_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total_result = await db.execute(count_stmt)
+        total = total_result.scalar() or 0
+
+        # Sorting
+        sort_column_map = {
+            "created_at": Receipt.created_at,
+            "gross_weight": Receipt.gross_weight,
+            "tare_weight": Receipt.tare_weight,
+            "date_time": Receipt.date_time,
+        }
+        sort_col = sort_column_map.get(sort_by, Receipt.created_at)
+        ordered_stmt = base_stmt.order_by(
+            asc(sort_col) if sort_dir == "asc" else desc(sort_col)
+        )
+
+        # Pagination
+        offset = (page - 1) * limit
+        paged_stmt = ordered_stmt.offset(offset).limit(limit)
+
+        result = await db.execute(paged_stmt)
+        rows = result.all()
+        return rows, total
+
+    @staticmethod
+    async def get_receipt_by_id(db: AsyncSession, receipt_id: int):
+        """Single receipt with tenant enrichment."""
+        stmt = (
+            select(
+                Receipt,
+                ActivationKey.company_name.label("ak_company"),
+                ActivationKey.status.label("ak_status"),
+                App.app_name.label("app_name"),
+                App.app_id.label("app_id_str"),
+            )
+            .join(Machine, Receipt.machine_id == Machine.machine_id, isouter=True)
+            .join(ActivationKey, Machine.key_id == ActivationKey.token, isouter=True)
+            .join(App, ActivationKey.app_id == App.id, isouter=True)
+            .where(Receipt.id == receipt_id)
+        )
+        result = await db.execute(stmt)
+        return result.first()
+
+    @staticmethod
+    async def get_machines_for_key(db: AsyncSession, key_token: str):
+        """All machines linked to an ActivationKey with receipt counts."""
+        receipt_count_sub = (
+            select(Receipt.machine_id, func.count(Receipt.id).label("cnt"))
+            .group_by(Receipt.machine_id)
+            .subquery()
+        )
+        stmt = (
+            select(Machine, receipt_count_sub.c.cnt.label("receipt_count"))
+            .outerjoin(receipt_count_sub, Machine.machine_id == receipt_count_sub.c.machine_id)
+            .where(Machine.key_id == key_token)
+            .order_by(Machine.created_at.desc())
+        )
+        result = await db.execute(stmt)
+        return result.all()
+
+    @staticmethod
+    async def get_machines_for_app(db: AsyncSession, app_uuid: uuid.UUID):
+        """All machines linked to an App (via ActivationKey) with receipt counts."""
+        receipt_count_sub = (
+            select(Receipt.machine_id, func.count(Receipt.id).label("cnt"))
+            .group_by(Receipt.machine_id)
+            .subquery()
+        )
+        stmt = (
+            select(Machine, receipt_count_sub.c.cnt.label("receipt_count"))
+            .outerjoin(receipt_count_sub, Machine.machine_id == receipt_count_sub.c.machine_id)
+            .join(ActivationKey, Machine.key_id == ActivationKey.token, isouter=True)
+            .join(App, ActivationKey.app_id == App.id, isouter=True)
+            .where(App.id == app_uuid)
+            .order_by(Machine.created_at.desc())
+        )
+        result = await db.execute(stmt)
+        return result.all()

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq
+from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
@@ -46,6 +46,7 @@ app.include_router(activation.router)
 app.include_router(notifications.router)
 app.include_router(admin_branding.router)
 app.include_router(admin_dlq.router)
+app.include_router(admin_receipts.router)
 
 # Static Files
 app.mount("/static", StaticFiles(directory="static"), name="static")

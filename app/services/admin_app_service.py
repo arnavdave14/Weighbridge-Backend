@@ -1,10 +1,11 @@
 """
 Admin App Service — Business logic for App and ActivationKey management.
 """
+import logging
 import uuid
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Optional
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,8 @@ from app.schemas.admin_schemas import AppCreate, ActivationKeyCreate, Activation
 from app.core.security import get_password_hash, verify_password
 from app.models.admin_models import ActivationKeySchema
 from app.core.validation_engine import get_etag
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_app_id() -> str:
@@ -191,12 +194,23 @@ class AdminAppService:
     async def verify_hardware_activation(
         db: AsyncSession,
         raw_key: str,
-        requested_app_id_str: str
+        requested_app_id_str: str,
+        machine_id: Optional[str] = None,  # GAP-1: optional pre-registration
     ) -> dict:
         """
-        Called by the physical weighbridge device.
+        Called by the physical weighbridge device during initial setup.
         Validates the raw key AND checks it belongs to the requested App.
         If it belongs to a DIFFERENT app → log a notification + fail.
+
+        GAP-1 FIX: If machine_id is provided, the Machine is immediately
+        upserted in PostgreSQL with key_id = matched_key.token.
+        This ensures tenant linkage exists before the first receipt sync,
+        so the admin panel enriches data from day one.
+
+        The upsert is idempotent:
+          - New machine   → INSERT with key_id
+          - Known machine → UPDATE key_id only if currently NULL
+            (prevents accidental reassignment on re-activation)
         """
         all_keys = await AdminRepo.get_all_keys(db)
 
@@ -249,6 +263,59 @@ class AdminAppService:
             matched_key.status = "expired"
             await AdminRepo.update_key(db, matched_key)
             raise HTTPException(status_code=403, detail="License has expired")
+
+        # GAP-1 FIX: Pre-register Machine in PostgreSQL if machine_id provided.
+        # This is a best-effort operation — failure MUST NOT block activation.
+        if machine_id:
+            try:
+                from app.models.models import Machine
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+                from sqlalchemy import text
+
+                # Build the UPSERT:
+                # - INSERT new row with key_id set
+                # - On conflict (machine_id already exists): update key_id ONLY
+                #   if it is currently NULL (idempotent — never overwrites a valid tenant link)
+                upsert_stmt = pg_insert(Machine).values(
+                    machine_id=machine_id,
+                    name=machine_id,        # placeholder; device will update on first sync
+                    is_active=True,
+                    key_id=matched_key.token,
+                    is_synced=False,
+                    sync_attempts=0,
+                ).on_conflict_do_update(
+                    index_elements=["machine_id"],
+                    set_={
+                        # Only update key_id if the existing row has no tenant linkage
+                        # COALESCE(excluded, current) ensures we never overwrite a valid key_id
+                        "key_id": text(
+                            "COALESCE(machines.key_id, EXCLUDED.key_id)"
+                        ),
+                    },
+                )
+                await db.execute(upsert_stmt)
+                # Note: commit is called below with the notification
+                logger.info(
+                    "[Activation] Pre-registered machine=%s with key_id=%s (company=%s)",
+                    machine_id, matched_key.token, matched_key.company_name
+                )
+
+                await AdminRepo.create_notification(
+                    db,
+                    message=(
+                        f"Hardware activation successful: machine '{machine_id}' "
+                        f"linked to '{matched_key.company_name}'."
+                    ),
+                    notif_type="info",
+                    app_id=app.id,
+                    activation_key_id=matched_key.id,
+                )
+            except Exception as exc:
+                # GAP-1 is best-effort: log but never fail activation
+                logger.error(
+                    "[Activation] Machine pre-registration failed for %s: %s",
+                    machine_id, exc
+                )
 
         return {
             "status": "success",

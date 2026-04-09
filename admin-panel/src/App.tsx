@@ -7,6 +7,7 @@ import KeyManager from './pages/KeyManager'
 import Notifications from './pages/Notifications'
 import AppHistory from './pages/AppHistory'
 import DLQDashboard from './pages/DLQDashboard'
+import Receipts from './pages/Receipts'
 import { ToastProvider } from './context/ToastContext'
 import { Toaster } from './components/Toaster'
 
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="keys" element={<KeyManager />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="dlq" element={<DLQDashboard />} />
+            <Route path="receipts" element={<Receipts />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

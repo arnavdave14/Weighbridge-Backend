@@ -183,37 +183,58 @@ async def _sync_receipt(local_db: AsyncSession, receipt_id: int) -> bool:
         return False
 
 async def _sync_machine(local_db: AsyncSession, machine_id: int) -> bool:
-    """Orchestrates machine settings sync (Always UPSERT)."""
+    """Orchestrates machine settings sync to PostgreSQL (Always UPSERT).
+
+    GAP-2 FIX: key_id is now included in both the INSERT values and the
+    ON CONFLICT UPDATE set, so tenant linkage is never lost during sync.
+
+    GAP-7 FIX: is_synced, last_sync_at, sync_attempts, updated_at are
+    included so PostgreSQL mirrors real sync state from SQLite.
+    """
     machine = await local_db.get(Machine, machine_id)
     if not machine or not remote_session:
         return True if not machine else False
-    
+
     # Increment sync attempts on the source record (ONLY in worker)
     machine.sync_attempts += 1
-        
+
     try:
-        print(f"[SyncWorker] Syncing machine {machine.name} to PostgreSQL...")
-        print(f"[SyncWorker] Connecting to PostgreSQL...")
+        print(f"[SyncWorker] Syncing machine {machine.machine_id} (key_id={machine.key_id}) to PostgreSQL...")
         async with remote_session() as remote_db:
-            # Always UPSERT (ON CONFLICT DO UPDATE)
             stmt = pg_insert(Machine).values(
                 machine_id=machine.machine_id,
                 name=machine.name,
                 location=machine.location,
                 settings=machine.settings,
                 is_active=machine.is_active,
-                created_at=machine.created_at
+                # GAP-2: persist tenant linkage token
+                key_id=machine.key_id,
+                # GAP-7: persist sync state accurately
+                is_synced=machine.is_synced,
+                sync_attempts=machine.sync_attempts,
+                last_sync_at=machine.last_sync_at,
+                created_at=machine.created_at,
+                updated_at=machine.updated_at,
             ).on_conflict_do_update(
                 index_elements=["machine_id"],
                 set_={
-                    "name": machine.name, "location": machine.location, 
-                    "settings": machine.settings, "is_active": machine.is_active
+                    "name": machine.name,
+                    "location": machine.location,
+                    "settings": machine.settings,
+                    "is_active": machine.is_active,
+                    # GAP-2: always propagate key_id (never overwrite with NULL)
+                    "key_id": machine.key_id,
+                    # GAP-7: keep sync counters current
+                    "is_synced": machine.is_synced,
+                    "sync_attempts": machine.sync_attempts,
+                    "last_sync_at": machine.last_sync_at,
+                    "updated_at": machine.updated_at,
                 }
             )
             await remote_db.execute(stmt)
             await remote_db.commit()
-            print(f"[SyncWorker] PostgreSQL sync completed")
-        
+            print(f"[SyncWorker] PostgreSQL machine sync completed for {machine.machine_id}")
+
         machine.is_synced = True
         return True
     except Exception as e:
