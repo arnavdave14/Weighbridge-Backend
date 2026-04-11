@@ -39,6 +39,11 @@ async def upload_image_to_cloud(image_bytes: bytes, filename: str) -> Optional[s
     Returns:
         Public URL string on success, None on failure.
     """
+    # 1. Size Check (1MB limit)
+    if len(image_bytes) > 1 * 1024 * 1024:
+        logger.error(f"Image '{filename}' exceeds 1MB limit ({len(image_bytes)} bytes)")
+        return None
+
     if CLOUD_STORAGE_PROVIDER == "mock":
         return await _mock_upload(image_bytes, filename)
     

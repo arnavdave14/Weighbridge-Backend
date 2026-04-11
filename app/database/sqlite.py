@@ -28,11 +28,29 @@ import asyncio
 import os
 import sqlcipher3
 import aiosqlite
-from sqlalchemy import event, text
+from sqlalchemy import event, text, inspect
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+def migrate_sqlite_schema(connection):
+    """
+    Lightweight schema migration for SQLite.
+    Checks for missing columns in existing tables and adds them.
+    Runs within a synchronous 'run_sync' block from main.py lifespan.
+    """
+    inspector = inspect(connection)
+    
+    # 1. Check 'receipts' table for 'truck_no'
+    columns = [c['name'] for c in inspector.get_columns('receipts')]
+    if 'truck_no' not in columns:
+        logger.info("🛠️ Migrating SQLite: Adding missing 'truck_no' column to 'receipts' table.")
+        try:
+            connection.execute(text("ALTER TABLE receipts ADD COLUMN truck_no VARCHAR"))
+            logger.info("✅ Migration successful: 'truck_no' column added.")
+        except Exception as e:
+            logger.error("❌ Migration failed for 'truck_no' column: %s", e)
 
 # ─── SQLCipher Async Creator ──────────────────────────────────────────────────
 async def async_sqlcipher_creator():

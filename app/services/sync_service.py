@@ -21,6 +21,7 @@ from app.core.validation_engine import ValidationEngine
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.utils.crypto_util import generate_receipt_hash, GENESIS_HASH
 from app.services.audit_service import AuditService
+from app.utils.payload_util import flatten_payload_to_values, normalize_payload, validate_payload_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -101,58 +102,81 @@ class SyncService:
         current_chain_hash = last_receipt.current_hash if last_receipt and last_receipt.current_hash else GENESIS_HASH
         # -----------------------------------------------
 
+        # [OPTIMIZATION] Batch Idempotency Check
+        all_local_ids = [r.local_id for r in sync_data.receipts]
+        existing_local_ids = await ReceiptRepository.get_existing_local_ids(db, sync_data.machine_id, all_local_ids)
+
         # Process Receipts
         for r_schema in sync_data.receipts:
             try:
                 # A. Idempotency Check (Duplicate check)
-                existing = await ReceiptRepository.get_by_machine_and_local_id(
-                    db, sync_data.machine_id, r_schema.local_id
-                )
-                if existing:
+                if r_schema.local_id in existing_local_ids:
                     duplicate_count += 1
                     continue
 
-                # B. Normalization
-                normalized_data = ValidationEngine.normalize_custom_data(r_schema.custom_data, labels_config)
+                # B. Normalization & C. Validation
+                if schema_version < 2:
+                    # Legacy Flow (v1)
+                    normalized_data = ValidationEngine.normalize_custom_data(r_schema.custom_data or {}, labels_config)
+                    dummy_receipt = {"custom_data": normalized_data}
+                    is_valid, field_errors = ValidationEngine.validate_receipt(dummy_receipt, labels_config)
 
-                # C. Atomic Validation
-                dummy_receipt = {"custom_data": normalized_data}
-                is_valid, field_errors = ValidationEngine.validate_receipt(dummy_receipt, labels_config)
-
-                if not is_valid:
-                    failed_count += 1
-                    error_map[r_schema.local_id] = field_errors
-                    continue
+                    if not is_valid:
+                        failed_count += 1
+                        error_map[str(r_schema.local_id)] = field_errors
+                        continue
+                else:
+                    # v2+ Flow: Flexible Schema with Fallback Layer
+                    # 1. Normalize Variations (Silent Correction)
+                    # Corrects truckNo -> truck_no, uppercase truck numbers, etc.
+                    payload = normalize_payload(r_schema.payload_json)
+                    
+                    # 2. Validate Critical Fields (Selective Rejection)
+                    # Enforces 10 objects image limit, size limits, and format checks.
+                    # This raises ValueError on failure.
+                    validate_payload_fallback(payload, r_schema.image_urls)
+                    
+                    # Update schema reference with normalized payload for persistence
+                    r_schema.payload_json = payload
 
                 # D. Preparation for Bulk Insert
                 new_receipt = Receipt(
                     machine_id=sync_data.machine_id,
                     local_id=r_schema.local_id,
                     date_time=r_schema.date_time,
-                    gross_weight=r_schema.gross_weight,
-                    tare_weight=r_schema.tare_weight,
-                    rate=r_schema.rate,
-                    custom_data=normalized_data,
+                    
+                    # --- Core Flexible Structure ---
+                    payload_json=r_schema.payload_json,
+                    image_urls=r_schema.image_urls,
+                    search_text=flatten_payload_to_values(r_schema.payload_json),
+                    
                     share_token=str(uuid.uuid4())[:12],
                     whatsapp_status="pending",
                     is_synced=False,
                     user_id=r_schema.user_id or None,
-                    # Correction System (Phase 2 Refined)
+                    
+                    # Correction System
                     corrected_from_id=r_schema.corrected_from_id,
                     correction_reason=r_schema.correction_reason,
-                    hash_version=1
+                    hash_version=2, # Upgraded hash version for flexible schema
+                    
+                    # --- Legacy Compatibility Defaults ---
+                    # Populated from normalized payload for historical column consistency
+                    gross_weight=float(r_schema.payload_json.get("data", {}).get("gross", 0.0)),
+                    tare_weight=float(r_schema.payload_json.get("data", {}).get("tare", 0.0)),
+                    truck_no=r_schema.payload_json.get("data", {}).get("truck_no", ""),
+                    rate=0.0,
+                    custom_data={}
                 )
                 
                 # --- [Phase 2] Generate Cryptographic Hash ---
-                # We use a dict of the record fields for stable hashing
+                # Hash now includes payload_json and image_urls
                 receipt_dict = {
                     "machine_id": new_receipt.machine_id,
                     "local_id": new_receipt.local_id,
                     "date_time": str(new_receipt.date_time),
-                    "gross_weight": str(new_receipt.gross_weight),
-                    "tare_weight": str(new_receipt.tare_weight),
-                    "rate": str(new_receipt.rate),
-                    "custom_data": new_receipt.custom_data,
+                    "payload_json": new_receipt.payload_json,
+                    "image_urls": new_receipt.image_urls,
                     "user_id": new_receipt.user_id,
                     "is_deleted": False,
                     "corrected_from_id": new_receipt.corrected_from_id,
@@ -169,10 +193,15 @@ class SyncService:
 
                 valid_receipt_objects.append(new_receipt)
 
+            except ValueError as e:
+                failed_count += 1
+                error_map[str(r_schema.local_id)] = {"validation": str(e)}
+                logger.warning(f"[Sync] Validation failed for receipt {r_schema.local_id} from machine {sync_data.machine_id}: {e}")
+
             except Exception as e:
                 failed_count += 1
-                error_map[r_schema.local_id] = {"internal_error": str(e)}
-                logger.error(f"[Sync] Logic error for receipt {r_schema.local_id}: {e}")
+                error_map[str(r_schema.local_id)] = {"internal_error": str(e)}
+                logger.error(f"[Sync] Unexpected error for receipt {r_schema.local_id} from machine {sync_data.machine_id}: {e}", exc_info=True)
 
         # Transactional Bulk Insert
         if valid_receipt_objects:

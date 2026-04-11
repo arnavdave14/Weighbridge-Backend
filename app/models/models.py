@@ -55,12 +55,25 @@ class Receipt(Base):
     machine_id = Column(String, ForeignKey("machines.machine_id"), nullable=False, index=True)
     local_id = Column(Integer, nullable=False)
     date_time = Column(DateTime(timezone=True), nullable=False, index=True)
-    gross_weight = Column(Numeric(precision=10, scale=2), nullable=False)
-    tare_weight = Column(Numeric(precision=10, scale=2), nullable=False)
+    
+    # --- Flexible Payload (Schema-Flexible Architecture) ---
+    # Stores the full frontend-defined data (gross, tare, custom fields, etc.)
+    payload_json = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True)
+    
+    # Stores unified image URLs (migrated from ReceiptImage table)
+    image_urls = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True, server_default='[]')
+    
+    # Unified search column (flattened values only)
+    search_text = Column(Text, nullable=True)
+
+    # --- Deprecated Rigid Fields (Do not use for new features) ---
+    gross_weight = Column(Numeric(precision=10, scale=2), nullable=True)
+    tare_weight = Column(Numeric(precision=10, scale=2), nullable=True)
+    truck_no = Column(String, nullable=True)
     rate = Column(Numeric(precision=10, scale=2), nullable=True)
-    custom_data = Column(JSON, nullable=False)
-    image_paths = Column(JSON, nullable=False, server_default='[]')
-    image_urls = Column(JSON, nullable=True, server_default='[]')
+    custom_data = Column(JSON, nullable=True)
+    
+    image_paths = Column(JSON, nullable=True, server_default='[]')
     share_token = Column(String, unique=True, index=True, nullable=False)
     whatsapp_status = Column(String, default="pending", nullable=False)
     

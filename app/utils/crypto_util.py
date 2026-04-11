@@ -29,31 +29,32 @@ def generate_receipt_hash(receipt_data: Dict[str, Any], previous_hash: str, vers
     Payload: previous_hash || version || normalized_json
     """
     if version == 1:
-        # 1. Normalize and filter fields
-        # Exclude metadata/transient fields
+        # Version 1: Legacy rigid schema hashing
         clean_data = {
             str(k): normalize_for_hash(v) for k, v in receipt_data.items() 
-            if k not in ("id", "current_hash", "previous_hash", "created_at", "updated_at", "is_synced", "synced_at", "sync_attempts", "last_error", "hash_version")
+            if k not in ("id", "current_hash", "previous_hash", "created_at", "updated_at", "is_synced", "synced_at", "sync_attempts", "last_error", "hash_version", "payload_json", "image_urls", "search_text")
         }
-        
-        # 2. Stable JSON serialization
-        # - sort_keys=True: deterministic order
-        # - separators=(",", ":"): no whitespace
-        # - ensure_ascii=False: handle unicode correctly
-        normalized_payload = json.dumps(
-            clean_data, 
-            sort_keys=True, 
-            separators=(",", ":"), 
-            ensure_ascii=False
-        )
-        
-        # 3. Concatenate with previous hash and version
-        # Using a stable delimiter
-        payload = f"{previous_hash}||v{version}||{normalized_payload}"
-        
-        # 4. Compute SHA256
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    elif version == 2:
+        # Version 2: Schema-flexible hashing (payload_json + image_urls)
+        clean_data = {
+            str(k): normalize_for_hash(v) for k, v in receipt_data.items()
+            if k in ("machine_id", "local_id", "date_time", "payload_json", "image_urls", "user_id", "is_deleted", "corrected_from_id", "correction_reason")
+        }
+    else:
+        raise ValueError(f"Unsupported hash version: {version}")
+
+    # 2. Stable JSON serialization
+    normalized_payload = json.dumps(
+        clean_data, 
+        sort_keys=True, 
+        separators=(",", ":"), 
+        ensure_ascii=False
+    )
     
-    raise ValueError(f"Unsupported hash version: {version}")
+    # 3. Concatenate with previous hash and version
+    payload = f"{previous_hash}||v{version}||{normalized_payload}"
+    
+    # 4. Compute SHA256
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"

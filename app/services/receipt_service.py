@@ -42,16 +42,22 @@ class ReceiptService:
         if not receipt:
             return None
 
-        vehicle = receipt.custom_data.get("vehicle_number", "N/A")
-        net_weight = receipt.gross_weight - receipt.tare_weight
+        # Extract data from payload_json["data"] with fallback
+        payload = receipt.payload_json or {}
+        data = payload.get("data", {})
+        
+        vehicle = data.get("vehicle_number") or receipt.custom_data.get("vehicle_number", "N/A") if receipt.custom_data else "N/A"
+        gross = data.get("gross", receipt.gross_weight or 0)
+        tare = data.get("tare", receipt.tare_weight or 0)
+        net = data.get("net", (float(gross) - float(tare)))
         
         caption = caption_override or (
             f"👉 *View/Download PDF*\n\n"
             f"Slip No.: {receipt.local_id}\n"
             f"Vehicle No.: {vehicle}\n"
-            f"Gross Weight: {receipt.gross_weight:,.2f} kg\n"
-            f"Tare Weight: {receipt.tare_weight:,.2f} kg\n"
-            f"Net Weight: {net_weight:,.2f} kg\n"
+            f"Gross Weight: {float(gross):,.2f} kg\n"
+            f"Tare Weight: {float(tare):,.2f} kg\n"
+            f"Net Weight: {float(net):,.2f} kg\n"
             f"Date: {receipt.date_time.strftime('%I:%M %p | %d/%m/%Y')}\n\n"
             f"👉 *View PDF :-*"
         )
@@ -95,10 +101,14 @@ class ReceiptService:
         dummy_receipt = Receipt(
             local_id=slip_no,
             date_time=datetime.now(),
-            gross_weight=gross_weight,
-            tare_weight=tare_weight,
-            rate=0,
-            custom_data={"vehicle_number": vehicle},
+            payload_json={
+                "data": {
+                    "gross": gross_weight,
+                    "tare": tare_weight,
+                    "net": gross_weight - tare_weight,
+                    "vehicle_number": vehicle
+                }
+            },
             share_token="test-token"
         )
         pdf_content = PDFService.generate_receipt_pdf(dummy_receipt)

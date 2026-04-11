@@ -18,6 +18,24 @@ class ReceiptRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_existing_local_ids(db: AsyncSession, machine_id: str, local_ids: List[int]) -> set:
+        """
+        Batch check which local_ids already exist for a given machine.
+        Returns a set of existing local_ids.
+        """
+        if not local_ids:
+            return set()
+            
+        stmt = select(Receipt.local_id).where(
+            and_(
+                Receipt.machine_id == machine_id,
+                Receipt.local_id.in_(local_ids)
+            )
+        )
+        result = await db.execute(stmt)
+        return set(result.scalars().all())
+
+    @staticmethod
     async def get_by_share_token(db: AsyncSession, share_token: str) -> Optional[Receipt]:
         result = await db.execute(select(Receipt).where(Receipt.share_token == share_token))
         return result.scalar_one_or_none()

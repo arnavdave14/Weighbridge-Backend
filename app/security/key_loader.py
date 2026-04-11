@@ -16,6 +16,7 @@ Usage:
 import os
 import logging
 import warnings
+from typing import Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def _try_import_keyring():
         return None
 
 
-def get_secret(key_name: str, *, env_fallback: str | None = None) -> str | None:
+def get_secret(key_name: str, *, env_fallback: Optional[str] = None) -> Optional[str]:
     """
     Retrieve a secret by name.
 

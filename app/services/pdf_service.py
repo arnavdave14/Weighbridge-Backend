@@ -47,34 +47,48 @@ class PDFService:
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.ln(5)
         
-        # Dynamic Fields
+        # --- Core Data Extraction ---
+        # Strategy: Use payload_json["data"] if available, fallback to legacy fields
+        payload = receipt.payload_json or {}
+        data = payload.get("data", {})
+        
+        # Fallback logic for legacy receipts not yet migrated or if payload is empty
+        gross = data.get("gross", receipt.gross_weight or 0)
+        tare = data.get("tare", receipt.tare_weight or 0)
+        net = data.get("net", (float(gross) - float(tare)))
+        rate = data.get("rate", receipt.rate or 0)
+        
+        # Collect dynamic fields (everything in data except core weights)
+        core_keys = {"gross", "tare", "net", "rate", "remarks"}
+        dynamic_fields = [(k, v) for k, v in data.items() if k.lower() not in core_keys]
+        
+        # If dynamic_fields is empty, fallback to old custom_data
+        if not dynamic_fields and receipt.custom_data:
+            dynamic_fields = [(k, v) for k, v in receipt.custom_data.items() if k.lower() != 'remarks']
+
+        # Render dynamic fields in 2 columns
         pdf.set_font("Helvetica", "", 10)
-        custom_data = receipt.custom_data or {}
-        
-        # Create a list of fields excluding remarks
-        fields = [(k, v) for k, v in custom_data.items() if k.lower() != 'remarks']
-        
-        for i in range(0, len(fields), 2):
-            k1, v1 = fields[i]
+        for i in range(0, len(dynamic_fields), 2):
+            k1, v1 = dynamic_fields[i]
             pdf.set_font("Helvetica", "B", 10)
-            pdf.cell(40, 8, f"{k1.upper()} : ", ln=False)
+            pdf.cell(40, 8, f"{str(k1).replace('_', ' ').upper()} : ", ln=False)
             pdf.set_font("Helvetica", "", 10)
             pdf.cell(50, 8, str(v1), ln=False)
             
-            if i + 1 < len(fields):
-                k2, v2 = fields[i+1]
+            if i + 1 < len(dynamic_fields):
+                k2, v2 = dynamic_fields[i+1]
                 pdf.set_font("Helvetica", "B", 10)
-                pdf.cell(40, 8, f"{k2.upper()} : ", ln=False)
+                pdf.cell(40, 8, f"{str(k2).replace('_', ' ').upper()} : ", ln=False)
                 pdf.set_font("Helvetica", "", 10)
                 pdf.cell(0, 8, str(v2), ln=True)
             else:
                 pdf.ln(8)
                 
-        # rate/charges
+        # Charges
         pdf.set_font("Helvetica", "B", 10)
         pdf.cell(40, 8, "CHARGES : ", ln=False)
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 8, f"Rs. {float(receipt.rate or 0):.2f}", ln=True)
+        pdf.cell(0, 8, f"Rs. {float(rate):.2f}", ln=True)
         
         pdf.ln(2)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
@@ -82,21 +96,21 @@ class PDFService:
         
         # Weight Details
         pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(60, 10, f"GROSS WEIGHT : {float(receipt.gross_weight):.2f} KG", ln=True)
-        pdf.cell(60, 10, f"TARE WEIGHT  : {float(receipt.tare_weight):.2f} KG", ln=True)
+        pdf.cell(60, 10, f"GROSS WEIGHT : {float(gross):.2f} KG", ln=True)
+        pdf.cell(60, 10, f"TARE WEIGHT  : {float(tare):.2f} KG", ln=True)
         
-        net_weight = abs(float(receipt.gross_weight) - float(receipt.tare_weight))
         pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(60, 10, f"NET WEIGHT   : {net_weight:.2f} KG", ln=True)
+        pdf.cell(60, 10, f"NET WEIGHT   : {float(net):.2f} KG", ln=True)
         
         pdf.ln(5)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.ln(5)
         
         # Remarks
-        if custom_data.get("remarks"):
+        remarks = data.get("remarks") or (receipt.custom_data.get("remarks") if receipt.custom_data else None)
+        if remarks:
             pdf.set_font("Helvetica", "I", 10)
-            pdf.multi_cell(0, 8, f"Remarks: {custom_data['remarks']}")
+            pdf.multi_cell(0, 8, f"Remarks: {remarks}")
             pdf.ln(5)
             
         # Footer

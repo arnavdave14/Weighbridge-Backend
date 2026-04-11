@@ -26,7 +26,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from app.database.sqlite import local_engine, verify_encryption, local_session
+from app.database.sqlite import local_engine, verify_encryption, local_session, migrate_sqlite_schema
 from app.services.integrity_service import IntegrityService
 from contextlib import asynccontextmanager
 
@@ -41,6 +41,7 @@ async def lifespan(app: "FastAPI"):
     logger.info("Initializing Local Database (SQLite)...")
     async with local_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(migrate_sqlite_schema)
         
     # 1. Proactively verify SQLCipher Encryption (Strict enforcement)
     await verify_encryption()

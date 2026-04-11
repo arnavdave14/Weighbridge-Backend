@@ -460,7 +460,7 @@ class AdminReceiptRepo:
             conditions.append(Receipt.is_synced == is_synced)
         if search:
             conditions.append(
-                cast(Receipt.custom_data, String).ilike(f"%{search}%")
+                Receipt.search_text.ilike(f"%{search}%")
             )
 
         if conditions:

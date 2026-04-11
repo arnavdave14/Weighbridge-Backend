@@ -35,12 +35,21 @@ interface Receipt {
   local_id: number
   machine_id: string
   date_time: string
+  
+  // New Flexible Schema
+  payload_json?: {
+    data: Record<string, any>
+  }
+  image_urls?: string[]
+  
+  // Legacy fields (kept for backward compatibility during transition)
   gross_weight: number
   tare_weight: number
   net_weight: number
   rate?: number
   truck_no?: string
   custom_data: Record<string, any>
+  
   is_synced: boolean
   sync_attempts: number
   last_error?: string
@@ -448,12 +457,22 @@ export default function Receipts() {
                       </span>
                     </td>
                     <td>
-                      <span className="text-sm font-bold text-brand-700">
-                        {r.net_weight.toLocaleString()} kg
-                      </span>
-                      <span className="block text-[10px] text-surface-400">
-                        G:{r.gross_weight} / T:{r.tare_weight}
-                      </span>
+                      {(() => {
+                        const data = r.payload_json?.data || {}
+                        const gross = data.gross ?? r.gross_weight
+                        const tare = data.tare ?? r.tare_weight
+                        const net = data.net ?? r.net_weight
+                        return (
+                          <>
+                            <span className="text-sm font-bold text-brand-700">
+                              {(Number(net) || 0).toLocaleString()} kg
+                            </span>
+                            <span className="block text-[10px] text-surface-400">
+                              G:{gross} / T:{tare}
+                            </span>
+                          </>
+                        )
+                      })()}
                     </td>
                     <td>
                       {r.app_name
@@ -566,24 +585,32 @@ function ReceiptDetailPanel({ receipt, onClose }: { receipt: Receipt; onClose: (
 
         <div className="p-6 space-y-5">
           {/* Core weights */}
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: 'Gross', value: `${receipt.gross_weight} kg`, color: 'text-surface-700' },
-              { label: 'Tare', value: `${receipt.tare_weight} kg`, color: 'text-surface-700' },
-              { label: 'Net', value: `${receipt.net_weight} kg`, color: 'text-brand-700 font-bold' },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="bg-surface-50 rounded-xl p-3 border border-surface-100 text-center">
-                <p className="text-[10px] text-surface-400 mb-1">{label}</p>
-                <p className={`text-sm ${color}`}>{value}</p>
+          {(() => {
+            const data = receipt.payload_json?.data || {}
+            const gross = data.gross ?? receipt.gross_weight
+            const tare = data.tare ?? receipt.tare_weight
+            const net = data.net ?? receipt.net_weight
+            
+            return (
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Gross', value: `${gross} kg`, color: 'text-surface-700' },
+                  { label: 'Tare', value: `${tare} kg`, color: 'text-surface-700' },
+                  { label: 'Net', value: `${net} kg`, color: 'text-brand-700 font-bold' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="bg-surface-50 rounded-xl p-3 border border-surface-100 text-center">
+                    <p className="text-[10px] text-surface-400 mb-1">{label}</p>
+                    <p className={`text-sm ${color}`}>{value}</p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )
+          })()}
 
           {/* Metadata grid */}
           <div className="space-y-2">
             {[
-              { icon: Truck, label: 'Truck No', value: receipt.truck_no || '—' },
-              { icon: Scale, label: 'Date & Time', value: format(new Date(receipt.date_time), 'dd MMM yyyy, HH:mm:ss') },
+              { icon: Truck, label: 'Date & Time', value: format(new Date(receipt.date_time), 'dd MMM yyyy, HH:mm:ss') },
               { icon: Cpu, label: 'Machine', value: receipt.machine_id },
               { icon: Building2, label: 'Customer', value: receipt.company_name || '—' },
               { icon: Users, label: 'Operator', value: receipt.employee_name ? `${receipt.employee_name} (@${receipt.employee_username})` : '—' },
@@ -598,6 +625,48 @@ function ReceiptDetailPanel({ receipt, onClose }: { receipt: Receipt; onClose: (
               </div>
             ))}
           </div>
+
+          {/* Dynamic Data Content */}
+          <div>
+            <p className="text-xs font-bold text-surface-600 uppercase tracking-wide mb-2">Weightment Data</p>
+            <div className="grid grid-cols-1 gap-2">
+              {(() => {
+                const data = receipt.payload_json?.data || receipt.custom_data || {}
+                const entries = Object.entries(data).filter(([k]) => !['gross', 'tare', 'net', 'rate', 'remarks'].includes(k.toLowerCase()))
+                
+                if (entries.length === 0) return <p className="text-xs text-surface-400 italic">No additional fields</p>
+
+                return entries.map(([key, val]) => (
+                  <div key={key} className="flex items-center justify-between p-3 rounded-xl bg-surface-50 border border-surface-100">
+                    <span className="text-[10px] text-surface-500 font-bold capitalize">{key.replace(/_/g, ' ')}</span>
+                    <span className="text-xs font-semibold text-surface-800">{String(val)}</span>
+                  </div>
+                ))
+              })()}
+            </div>
+          </div>
+
+          {/* Images Section */}
+          {(receipt.image_urls && receipt.image_urls.length > 0) && (
+            <div>
+              <p className="text-xs font-bold text-surface-600 uppercase tracking-wide mb-2">Images ({receipt.image_urls.length})</p>
+              <div className="grid grid-cols-2 gap-2">
+                {receipt.image_urls.map((url, idx) => (
+                  <div key={idx} className="aspect-square rounded-xl border border-surface-100 overflow-hidden bg-surface-50 relative group">
+                    <img src={url} alt={`Receipt ${idx}`} className="w-full h-full object-cover" />
+                    <a 
+                      href={url} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-bold"
+                    >
+                      View Full
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Sync status */}
           <div className="p-4 rounded-xl border border-surface-100 bg-surface-50 space-y-2">
@@ -614,14 +683,6 @@ function ReceiptDetailPanel({ receipt, onClose }: { receipt: Receipt; onClose: (
                 {receipt.last_error}
               </div>
             )}
-          </div>
-
-          {/* Dynamic custom_data */}
-          <div>
-            <p className="text-xs font-bold text-surface-600 uppercase tracking-wide mb-2">Custom Fields</p>
-            <pre className="p-3 bg-surface-900 text-emerald-400 text-[10px] font-mono rounded-xl overflow-x-auto max-h-52">
-              {JSON.stringify(receipt.custom_data, null, 2)}
-            </pre>
           </div>
         </div>
       </motion.div>

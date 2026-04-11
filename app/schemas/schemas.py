@@ -40,22 +40,24 @@ class MachineSchema(MachineBase):
 class ReceiptBase(BaseModel):
     local_id: int
     date_time: datetime
-    gross_weight: float
-    tare_weight: float
-    rate: Optional[float] = None
-    custom_data: Dict[str, Any]
-    image_paths: Optional[List[str]] = []
-    # Flutter sends images as Base64 strings. Backend decodes → raw bytes → SQLite BLOB.
-    # Base64 strings are NEVER stored in the database directly.
-    images_base64: Optional[List[str]] = []
-    # Employee linkage: set by Flutter from the logged-in employee's JWT.
-    # Optional for backward compatibility — existing clients not sending this
-    # field will produce receipts with user_id = NULL (still valid).
-    # Correction metadata
+    
+    # Flexible Structure
+    payload_json: Dict[str, Any] = Field(..., description="Full frontend data in {data: {...}} format")
+    image_urls: List[str] = Field(default_factory=list)
+    
+    # Deprecated (for backward compatibility during migration)
+    gross_weight: Optional[float] = None
+    tare_weight: Optional[float] = None
+    custom_data: Optional[Dict[str, Any]] = None
+    
+    # Infrastructure Fields
+    user_id: Optional[str] = None
     corrected_from_id: Optional[int] = None
     correction_reason: Optional[str] = None
     
-    user_id: Optional[str] = None
+    # SQLite local sync artifacts (deprecated in favor of unified image_urls)
+    images_base64: Optional[List[str]] = []
+    image_paths: Optional[List[str]] = []
 
 
 class ReceiptCreate(ReceiptBase):
