@@ -403,25 +403,27 @@ export default function Receipts() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>
+                <th className="w-[1px] text-center">#</th>
+                <th className="w-[160px] whitespace-nowrap">
                   <button onClick={() => toggleSort('date_time')} className="flex items-center gap-1 hover:text-surface-700">
                     Date <SortIcon field="date_time" />
                   </button>
                 </th>
-                <th className="flex items-center gap-1">
-                  <Truck className="w-3.5 h-3.5" /> Truck No
+                <th className="w-[140px] whitespace-nowrap">
+                  <div className="flex items-center gap-1">
+                    <Truck className="w-3.5 h-3.5" /> Truck No
+                  </div>
                 </th>
-                <th>
+                <th className="w-[150px] whitespace-nowrap">
                   <button onClick={() => toggleSort('gross_weight')} className="flex items-center gap-1 hover:text-surface-700">
                     Net Weight (kg) <SortIcon field="gross_weight" />
                   </button>
                 </th>
-                <th className="flex items-center gap-1"><AppWindow className="w-3.5 h-3.5" /> App</th>
-                <th className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> Customer</th>
-                <th className="flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> Machine</th>
-                <th className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Operator</th>
-                <th>Sync</th>
+                <th className="w-[140px] whitespace-nowrap"><div className="flex items-center gap-1"><AppWindow className="w-3.5 h-3.5" /> App</div></th>
+                <th className="w-[180px] whitespace-nowrap"><div className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> Customer</div></th>
+                <th className="w-[120px] whitespace-nowrap"><div className="flex items-center gap-1"><Cpu className="w-3.5 h-3.5" /> Machine</div></th>
+                <th className="w-[140px] whitespace-nowrap"><div className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> Operator</div></th>
+                <th className="w-[80px] text-center">Sync</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-100">
@@ -443,59 +445,59 @@ export default function Receipts() {
                     onClick={() => setSelectedReceipt(r)}
                     className="hover:bg-white/30 transition-colors cursor-pointer"
                   >
-                    <td className="text-xs text-surface-400 font-mono">
+                    <td className="text-xs text-surface-400 font-mono text-center">
                       {((page - 1) * limit) + idx + 1}
                     </td>
-                    <td>
-                      <span className="text-xs text-surface-600">
+                    <td className="whitespace-nowrap">
+                      <span className="text-xs text-surface-600 font-mono tabular-nums">
                         {format(new Date(r.date_time), 'dd MMM yy, HH:mm')}
                       </span>
                     </td>
-                    <td>
-                      <span className="text-sm font-semibold text-surface-800 font-mono">
-                        {r.truck_no || <span className="text-surface-300 text-xs italic">—</span>}
+                    <td className="whitespace-nowrap">
+                      <span className="text-sm font-bold text-surface-800 font-mono tracking-tight uppercase">
+                        {(r.payload_json?.data?.truck_no || r.truck_no) || <span className="text-surface-300 text-xs italic font-normal">—</span>}
                       </span>
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       {(() => {
-                        const data = r.payload_json?.data || {}
-                        const gross = data.gross ?? r.gross_weight
-                        const tare = data.tare ?? r.tare_weight
-                        const net = data.net ?? r.net_weight
+                        const payloadData = r.payload_json?.data || {}
+                        const gross = payloadData.gross ?? r.gross_weight
+                        const tare = payloadData.tare ?? r.tare_weight
+                        const net = payloadData.net ?? r.net_weight
                         return (
-                          <>
-                            <span className="text-sm font-bold text-brand-700">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-brand-700 font-mono tabular-nums">
                               {(Number(net) || 0).toLocaleString()} kg
                             </span>
-                            <span className="block text-[10px] text-surface-400">
+                            <span className="text-[10px] text-surface-400 font-mono tabular-nums">
                               G:{gross} / T:{tare}
                             </span>
-                          </>
+                          </div>
                         )
                       })()}
                     </td>
                     <td>
                       {r.app_name
-                        ? <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-100 font-medium">{r.app_name}</span>
+                        ? <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-100 font-bold uppercase tracking-wider">{r.app_name}</span>
                         : <span className="text-surface-300 text-xs">—</span>
                       }
                     </td>
                     <td>
-                      <span className="text-xs font-medium text-surface-700 max-w-[120px] truncate block">
-                        {r.company_name || <span className="text-surface-300 italic">Unknown</span>}
+                      <span className="text-xs font-semibold text-surface-700 truncate block max-w-[160px]" title={r.company_name}>
+                        {r.company_name || <span className="text-surface-300 italic font-normal">Unknown</span>}
                       </span>
                     </td>
                     <td>
-                      <span className="text-[11px] font-mono text-surface-500 max-w-[100px] truncate block">
+                      <span className="text-[11px] font-mono text-surface-500 truncate block max-w-[100px]" title={r.machine_id}>
                         {r.machine_id}
                       </span>
                     </td>
                     <td>
-                      <span className="text-xs font-medium text-surface-700">
-                        {r.employee_name || <span className="text-surface-300 italic">None</span>}
+                      <span className="text-xs font-medium text-surface-700 truncate block max-w-[120px]" title={r.employee_name}>
+                        {r.employee_name || <span className="text-surface-300 italic font-normal">None</span>}
                       </span>
                     </td>
-                    <td><SyncBadge synced={r.is_synced} /></td>
+                    <td className="text-center"><SyncBadge synced={r.is_synced} /></td>
                   </tr>
                 ))
               )}

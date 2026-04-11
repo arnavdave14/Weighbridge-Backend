@@ -395,7 +395,7 @@ class AdminRepo:
 # ═══════════════════════════════════════════════════════════════════
 
 import math
-from sqlalchemy import asc, desc, and_, cast, String
+from sqlalchemy import asc, desc, and_, or_, cast, String
 
 from app.models.models import Receipt, Machine
 from app.models.admin_models import ActivationKey, App
@@ -460,7 +460,10 @@ class AdminReceiptRepo:
             conditions.append(Receipt.is_synced == is_synced)
         if search:
             conditions.append(
-                Receipt.search_text.ilike(f"%{search}%")
+                or_(
+                    Receipt.search_text.ilike(f"%{search}%"),
+                    Receipt.machine_id.ilike(f"%{search}%")
+                )
             )
 
         if conditions:
