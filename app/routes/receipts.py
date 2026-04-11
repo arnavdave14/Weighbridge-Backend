@@ -13,6 +13,7 @@ from app.services.config_service import ConfigService
 from app.api.machine_deps import verify_apex_identity
 from app.models.admin_models import ActivationKey
 from app.core import security
+from app.api.security_deps import verify_integrity_block
 import os
 
 router = APIRouter()
@@ -25,7 +26,8 @@ async def sync_receipts(
     sync_data: ReceiptSync,
     x_schema_version: int = Header(..., alias="X-Schema-Version"),
     activation_key: ActivationKey = Depends(verify_apex_identity),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _integrity: None = Depends(verify_integrity_block)
 ):
     """
     APEX-TIER SECURE SYNC:

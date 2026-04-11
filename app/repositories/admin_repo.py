@@ -19,8 +19,14 @@ class AdminRepo:
     # ─────────────────────────────────────────
 
     @staticmethod
-    async def create_app(db: AsyncSession, app_id: str, app_name: str, description: Optional[str]) -> App:
-        db_app = App(app_id=app_id, app_name=app_name, description=description)
+    async def create_app(db: AsyncSession, app_id: str, app_name: str, description: Optional[str], whatsapp_sender_channel: Optional[str] = None, email_sender: Optional[str] = None) -> App:
+        db_app = App(
+            app_id=app_id, 
+            app_name=app_name, 
+            description=description,
+            whatsapp_sender_channel=whatsapp_sender_channel,
+            email_sender=email_sender
+        )
         db.add(db_app)
         await db.commit()
         await db.refresh(db_app)
@@ -61,9 +67,33 @@ class AdminRepo:
     @staticmethod
     async def soft_delete_app(db: AsyncSession, app: App) -> None:
         from datetime import datetime, timezone
-        app.deleted_at = datetime.now(timezone.utc)
+        from app.models.admin_models import ActivationKey
+        from sqlalchemy import update
+        
+        now = datetime.now(timezone.utc)
+        
+        # 1. Soft-delete the app
+        app.deleted_at = now
         db.add(app)
+        
+        # 2. Automatically revoke ALL associated license keys
+        await db.execute(
+            update(ActivationKey)
+            .where(ActivationKey.app_id == app.id)
+            .values(status="revoked", revoked_at=now)
+        )
+        
         await db.commit()
+
+    @staticmethod
+    async def update_app(db: AsyncSession, db_app: App, update_data: dict) -> App:
+        for key, value in update_data.items():
+            if hasattr(db_app, key):
+                setattr(db_app, key, value)
+        db.add(db_app)
+        await db.commit()
+        await db.refresh(db_app)
+        return db_app
 
     # ─────────────────────────────────────────
     # ActivationKey Operations
@@ -124,6 +154,24 @@ class AdminRepo:
         return db_key
 
     @staticmethod
+    async def update_key_notification_status(
+        db: AsyncSession, 
+        key_id: uuid.UUID, 
+        channel: str, 
+        status: str
+    ):
+        """Update the whatsapp_status or email_status of an activation key."""
+        result = await db.execute(select(ActivationKey).where(ActivationKey.id == key_id))
+        db_key = result.scalars().first()
+        if db_key:
+            if channel == "whatsapp":
+                db_key.whatsapp_status = status
+            elif channel == "email":
+                db_key.email_status = status
+            db.add(db_key)
+            await db.commit()
+
+    @staticmethod
     async def get_key_by_token(db: AsyncSession, token: str) -> Optional[ActivationKey]:
         result = await db.execute(select(ActivationKey).where(ActivationKey.token == token))
         return result.scalars().first()
@@ -175,6 +223,7 @@ class AdminRepo:
         db: AsyncSession,
         message: str,
         notif_type: str = "warning",
+        notification_type: str = "general",
         app_id: Optional[uuid.UUID] = None,
         activation_key_id: Optional[uuid.UUID] = None
     ) -> None:
@@ -182,7 +231,8 @@ class AdminRepo:
             app_id=app_id,
             activation_key_id=activation_key_id,
             message=message,
-            type=notif_type
+            type=notif_type,
+            notification_type=notification_type
         )
         db.add(notif)
         await db.commit()
@@ -266,7 +316,12 @@ class AdminRepo:
         target: str,
         payload: dict,
         error: str,
-        retry_count: int
+        retry_count: int,
+        notification_type: str = "general",
+        can_retry: bool = True,
+        sender_channel: str = None,
+        email_sender: str = None,
+        message_content: str = None
     ) -> FailedNotification:
         from app.models.admin_models import FailedNotification
         entry = FailedNotification(
@@ -274,9 +329,25 @@ class AdminRepo:
             target=target,
             payload=payload,
             error_reason=error,
-            retry_count=str(retry_count), # matches the model's current String type
-            status="pending"
+            retry_count=retry_count,
+            status="pending",
+            notification_type=notification_type,
+            can_retry=can_retry,
+            sender_channel=sender_channel,
+            email_sender=email_sender,
+            message_content=message_content
         )
+        db.add(entry)
+        await db.commit()
+        await db.refresh(entry)
+        return entry
+
+    @staticmethod
+    async def update_dlq_retry_stats(db: AsyncSession, entry: FailedNotification) -> FailedNotification:
+        """Increments retry count for manual DLQ recovery attempts."""
+        entry.status = "retried"
+        entry.retry_attempts_from_dlq += 1
+        entry.resolved_at = datetime.now(timezone.utc)
         db.add(entry)
         await db.commit()
         await db.refresh(entry)

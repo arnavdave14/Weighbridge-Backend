@@ -68,7 +68,7 @@ function CreateEmployeeDrawer({
 
     setSaving(true)
     try {
-      await api.post('/admin/employees', {
+      await api.post('/employees', {
         name: form.name,
         username: form.username,
         email: form.email || undefined,
@@ -379,7 +379,7 @@ export default function Employees() {
     if (!keyToken) { setEmployees([]); return }
     setLoading(true)
     try {
-      const { data } = await api.get('/admin/employees', {
+      const { data } = await api.get('/employees', {
         params: { key_id: keyToken, include_inactive: includeInactive }
       })
       setEmployees(data)
@@ -397,7 +397,7 @@ export default function Employees() {
   const handleDeactivate = useCallback(async (id: string, name: string) => {
     if (!window.confirm(`Deactivate ${name}? Their active sessions will stop working immediately.`)) return
     try {
-      await api.patch(`/admin/employees/${id}/deactivate`)
+      await api.patch(`/employees/${id}/deactivate`)
       toast.success(`${name} has been deactivated.`)
       loadEmployees(selectedKeyToken)
     } catch {

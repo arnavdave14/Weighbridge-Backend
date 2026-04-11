@@ -19,6 +19,8 @@ from app.repositories.admin_repo import AdminRepo
 from app.repositories.sync_repo import SyncRepository
 from app.core.validation_engine import ValidationEngine
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from app.utils.crypto_util import generate_receipt_hash, GENESIS_HASH
+from app.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,13 @@ class SyncService:
                 existing_machine.key_id = activation_key.token
                 logger.info(f"[Sync] Backfilled key_id for existing machine {sync_data.machine_id}")
 
+        # --- [Phase 2] Fetch last hash for chaining ---
+        last_receipt_stmt = select(Receipt).order_by(Receipt.id.desc()).limit(1)
+        res = await db.execute(last_receipt_stmt)
+        last_receipt = res.scalar_one_or_none()
+        current_chain_hash = last_receipt.current_hash if last_receipt and last_receipt.current_hash else GENESIS_HASH
+        # -----------------------------------------------
+
         # Process Receipts
         for r_schema in sync_data.receipts:
             try:
@@ -127,10 +136,37 @@ class SyncService:
                     share_token=str(uuid.uuid4())[:12],
                     whatsapp_status="pending",
                     is_synced=False,
-                    # Employee linkage: pass through if provided by Flutter client.
-                    # NULL if not provided — backward-compatible.
                     user_id=r_schema.user_id or None,
+                    # Correction System (Phase 2 Refined)
+                    corrected_from_id=r_schema.corrected_from_id,
+                    correction_reason=r_schema.correction_reason,
+                    hash_version=1
                 )
+                
+                # --- [Phase 2] Generate Cryptographic Hash ---
+                # We use a dict of the record fields for stable hashing
+                receipt_dict = {
+                    "machine_id": new_receipt.machine_id,
+                    "local_id": new_receipt.local_id,
+                    "date_time": str(new_receipt.date_time),
+                    "gross_weight": str(new_receipt.gross_weight),
+                    "tare_weight": str(new_receipt.tare_weight),
+                    "rate": str(new_receipt.rate),
+                    "custom_data": new_receipt.custom_data,
+                    "user_id": new_receipt.user_id,
+                    "is_deleted": False,
+                    "corrected_from_id": new_receipt.corrected_from_id,
+                    "correction_reason": new_receipt.correction_reason
+                }
+                new_receipt.previous_hash = current_chain_hash
+                new_receipt.current_hash = generate_receipt_hash(
+                    receipt_dict, current_chain_hash, version=new_receipt.hash_version
+                )
+                
+                # Advance the chain for the next record in the batch
+                current_chain_hash = new_receipt.current_hash
+                # ---------------------------------------------
+
                 valid_receipt_objects.append(new_receipt)
 
             except Exception as e:
@@ -143,7 +179,37 @@ class SyncService:
             try:
                 db.add_all(valid_receipt_objects)
                 await db.flush()
-                synced_count = len(valid_receipt_objects)
+                
+                # --- [Phase 2] Audit Log for Batch Creation ---
+                # Identify the common user if consistent in batch, or SYSTEM
+                batch_user_id = valid_receipt_objects[0].user_id if valid_receipt_objects else None
+                await AuditService.log_event(
+                    db=db,
+                    action_type="CREATE_BATCH",
+                    resource_type="RECEIPT",
+                    actor_type="USER" if batch_user_id else "SYSTEM",
+                    actor_id=batch_user_id or WORKER_ID,
+                    severity="INFO",
+                    metadata={
+                        "count": len(valid_receipt_objects),
+                        "machine_id": sync_data.machine_id,
+                        "first_local_id": valid_receipt_objects[0].local_id,
+                        "last_local_id": valid_receipt_objects[-1].local_id
+                    }
+                )
+                # --- [Phase 2 Hardening] Scale-out Checkpointing ---
+                # Create a checkpoint after batch persistence to speed up future audits
+                # Checkpoints are triggered every 1000 records
+                from app.services.integrity_service import IntegrityService
+                last_r = valid_receipt_objects[-1]
+                await IntegrityService.create_checkpoint_if_needed(
+                    db, 
+                    last_id=last_r.id, 
+                    last_hash=last_r.current_hash
+                )
+                # -----------------------------------------------
+                
+                synced_count += len(valid_receipt_objects)
             except Exception as e:
                 logger.error(f"Bulk insert failed: {e}")
                 raise e  # Rollback

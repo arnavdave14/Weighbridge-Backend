@@ -21,7 +21,18 @@ elif postgres_url and postgres_url.startswith("postgresql://"):
 dlq_engine = create_async_engine(postgres_url)
 AsyncSessionLocal = sessionmaker(dlq_engine, class_=AsyncSession, expire_on_commit=False)
 
-async def persist_dlq_entry_async(channel: str, target: str, payload: dict, error: str, retry_count: int):
+async def persist_dlq_entry_async(
+    channel: str, 
+    target: str, 
+    payload: dict, 
+    error: str, 
+    retry_count: int, 
+    notification_type: str = "general",
+    can_retry: bool = True,
+    sender_channel: str = None,
+    email_sender: str = None,
+    message_content: str = None
+):
     """
     Asynchronously persists a failed notification to the PostgreSQL DLQ table.
     """
@@ -34,17 +45,36 @@ async def persist_dlq_entry_async(channel: str, target: str, payload: dict, erro
             error_reason=error,
             retry_count=retry_count,
             status="pending",
+            notification_type=notification_type,
+            can_retry=can_retry,
+            sender_channel=sender_channel,
+            email_sender=email_sender,
+            message_content=message_content,
             failed_at=datetime.now(timezone.utc)
         )
         session.add(new_entry)
         await session.commit()
 
-def persist_dlq_entry_sync(channel: str, target: str, payload: dict, error: str, retry_count: int):
+def persist_dlq_entry_sync(
+    channel: str, 
+    target: str, 
+    payload: dict, 
+    error: str, 
+    retry_count: int, 
+    notification_type: str = "general",
+    can_retry: bool = True,
+    sender_channel: str = None,
+    email_sender: str = None,
+    message_content: str = None
+):
     """
     Synchronous entry point for Celery tasks.
     """
     try:
-        asyncio.run(persist_dlq_entry_async(channel, target, payload, error, retry_count))
+        asyncio.run(persist_dlq_entry_async(
+            channel, target, payload, error, retry_count, 
+            notification_type, can_retry, sender_channel, email_sender, message_content
+        ))
     except Exception as e:
         # We don't want DLQ persistence failure to crash the worker, but we must log it.
         import logging

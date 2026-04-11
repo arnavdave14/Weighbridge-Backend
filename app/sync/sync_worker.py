@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database.sqlite import local_session
 from app.database.postgres import remote_session
-from app.models.models import Receipt, ReceiptImage, SyncLog, Machine, SyncQueue
+from app.models.models import Receipt, ReceiptImage, SyncLog, Machine, SyncQueue, AuditLog
 from app.repositories.receipt_repo import ReceiptRepository
 from app.repositories.machine_repo import MachineRepository
 from app.repositories.sync_repo import SyncRepository
@@ -56,6 +56,8 @@ async def process_sync_queue():
                     success = await _sync_receipt(db, t_record_id)
                 elif t_table == "machines":
                     success = await _sync_machine(db, t_record_id)
+                elif t_table == "audit_logs":
+                    success = await _sync_audit_log(db, t_record_id)
                 
                 if success:
                     # ATOMIC UPDATE FOR SUCCESS
@@ -158,6 +160,13 @@ async def _sync_receipt(local_db: AsyncSession, receipt_id: int) -> bool:
                 whatsapp_status=receipt.whatsapp_status,
                 # Employee linkage — preserved through sync (NULL for pre-auth receipts).
                 user_id=receipt.user_id,
+                # TAMPER DETECTION FIELDS (Phase 2)
+                current_hash=receipt.current_hash,
+                previous_hash=receipt.previous_hash,
+                hash_version=receipt.hash_version,
+                corrected_from_id=receipt.corrected_from_id,
+                correction_reason=receipt.correction_reason,
+                is_deleted=receipt.is_deleted,
                 created_at=receipt.created_at,
                 updated_at=receipt.updated_at
             ).on_conflict_do_update(
@@ -169,8 +178,13 @@ async def _sync_receipt(local_db: AsyncSession, receipt_id: int) -> bool:
                     "custom_data": receipt.custom_data,
                     "image_urls": receipt.image_urls,
                     "whatsapp_status": receipt.whatsapp_status,
-                    # user_id: update if the PG row currently has NULL (backfill on re-sync)
                     "user_id": receipt.user_id,
+                    "current_hash": receipt.current_hash,
+                    "previous_hash": receipt.previous_hash,
+                    "hash_version": receipt.hash_version,
+                    "corrected_from_id": receipt.corrected_from_id,
+                    "correction_reason": receipt.correction_reason,
+                    "is_deleted": receipt.is_deleted,
                     "updated_at": receipt.updated_at
                 }
             )
@@ -243,6 +257,37 @@ async def _sync_machine(local_db: AsyncSession, machine_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"[SyncWorker][PG_PUSH] Machine {machine_id} failed: {e}")
+        return False
+
+async def _sync_audit_log(local_db: AsyncSession, log_id: int) -> bool:
+    """Syncs immutable audit logs to PostgreSQL."""
+    audit_log = await local_db.get(AuditLog, log_id)
+    if not audit_log or not remote_session:
+        return True if not audit_log else False
+
+    try:
+        async with remote_session() as remote_db:
+            # Audit logs are immutable, so we only INSERT
+            stmt = pg_insert(AuditLog).values(
+                timestamp=audit_log.timestamp,
+                actor_type=audit_log.actor_type,
+                actor_id=audit_log.actor_id,
+                action_type=audit_log.action_type,
+                resource_type=audit_log.resource_type,
+                resource_id=audit_log.resource_id,
+                severity=audit_log.severity,
+                metadata_json=audit_log.metadata_json,
+                is_synced=True,
+                created_at=audit_log.created_at
+            ).on_conflict_do_nothing()
+            
+            await remote_db.execute(stmt)
+            await remote_db.commit()
+            
+        audit_log.is_synced = True
+        return True
+    except Exception as e:
+        logger.error(f"[SyncWorker][PG_PUSH] AuditLog {log_id} failed: {e}")
         return False
 
 async def run_sync_worker_loop():

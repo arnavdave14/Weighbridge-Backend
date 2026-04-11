@@ -19,3 +19,5 @@ prometheus-fastapi-instrumentator
 prometheus-client
 requests
 fpdf2
+keyring
+slowapi

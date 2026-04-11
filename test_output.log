@@ -1,0 +1,22 @@
+🚨 CHECKPOINT META-CHAIN BROKEN between CP 2000 and 1000!
+Using Database: sqlite+aiosqlite:////Users/apple/Desktop/Weightment_software_backend/test_run_integrity.db
+--- Testing Strictly Deterministic Hashing ---
+Norm 1 (int 100): 100.000
+Norm 2 (Decimal 100.000): 100.000
+✅ Hashing is strictly deterministic (Fixed-precision strings).
+
+--- Testing Effective Records ---
+Total records in DB: 2
+Effective records: 1
+✅ Effective record filtering works.
+
+--- Testing Checkpoint Meta-Chaining ---
+Verifying broken meta-chain detection...
+✅ Meta-chain failure detected correctly.
+
+--- Testing Integrated Checkpointing ---
+Simulating 1000 records...
+Checkpoints created: 1
+✅ CP1 created correctly with Genesis link.
+
+🎉 ALL HARDENING TESTS PASSED!

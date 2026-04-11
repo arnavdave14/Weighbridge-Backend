@@ -1,71 +1,155 @@
 import logging
+import uuid
 from celery.exceptions import MaxRetriesExceededError
 from app.celery_app import celery_app
 from app.services.notification_service import NotificationService
+from app.api.admin_deps import get_remote_db
+from app.database.postgres import remote_session
+from app.repositories.admin_repo import AdminRepo
 from app.core.metrics import metrics
 from app.core.log_utils import structured_log
 from app.tasks.dlq_utils import persist_dlq_entry_sync
 
 logger = logging.getLogger("celery_tasks")
 
-@celery_app.task(bind=True, max_retries=5, retry_backoff=2, retry_backoff_max=32)
-def send_notification_task(self, key_data: dict, app_name: str, skip_channels: list = None):
-    """
-    Celery task that delegates to the NotificationService orchestrator.
-    Handles Celery-native retries.
-    State is passed across retries via skip_channels to prevent duplicate messages.
-    """
-    skip_channels = skip_channels or []
-    
-    structured_log(logger, logging.INFO, "task_execution_started", task_id=self.request.id, skip_channels=skip_channels)
-    
-    # Run the synchronous wrapper which handles the internal asyncio event loop
-    result_state = NotificationService.notify_license_generation_sync(
-        key_data=key_data, 
-        app_name=app_name, 
-        skip_channels=skip_channels
-    )
-    
-    successes = result_state.get("success", [])
-    failures = result_state.get("failed", {})
-    
-    # Update skip_channels with any newly successful channels
-    new_skip_channels = list(set(skip_channels + successes))
-    
-    if failures:
-        error_msgs = ", ".join([f"{ch}: {err}" for ch, err in failures.items()])
-        structured_log(logger, logging.WARNING, "task_partial_failure", task_id=self.request.id, attempt=self.request.retries + 1, error_message=error_msgs)
-        
-        try:
-            # Increment retry metric
-            for ch in failures.keys():
-                metrics.NOTIFICATION_RETRIES_TOTAL.labels(channel=ch).inc()
+import smtplib
+import requests
 
-            # Trigger Celery native exponential backoff retry.
-            raise self.retry(
-                exc=Exception(f"Failed channels: {error_msgs}"),
-                kwargs={
-                    "key_data": key_data,
-                    "app_name": app_name,
-                    "skip_channels": new_skip_channels
-                }
-            )
-        except MaxRetriesExceededError:
-            # Persistent DLQ Injection
-            structured_log(logger, logging.CRITICAL, "dlq_event_persistent", task_id=self.request.id, target_data=key_data, failed_channels=failures, retry_count=self.request.retries, status="permanently_failed")
-            
-            # Record each failed channel in the DB DLQ table
-            for channel, error in failures.items():
-                target = key_data.get("email") if channel == "email" else key_data.get("whatsapp_number")
-                persist_dlq_entry_sync(
-                    channel=channel,
-                    target=str(target),
-                    payload=key_data,
-                    error=error,
-                    retry_count=self.request.retries
-                )
-                metrics.NOTIFICATION_DLQ_TOTAL.labels(channel=channel).inc()
-            raise
+def is_retryable_exception(exc: Exception) -> bool:
+    """
+    Categorizes exceptions to avoid retrying permanent failures.
+    """
+    # SMTP Errors
+    if isinstance(exc, (smtplib.SMTPConnectError, smtplib.SMTPHeloError, smtplib.SMTPServerDisconnected)):
+        return True # Network/Connection issue
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return False # Invalid email
+    if isinstance(exc, smtplib.SMTPDataError):
+        # 5xx in data often means spam block or invalid content
+        return str(exc).startswith('5') == False 
+
+    # HTTP / WhatsApp Errors
+    if isinstance(exc, requests.exceptions.RequestException):
+        if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True
+        # If we got a 400 Bad Request or 401 Unauthorized, don't retry
+        if exc.response is not None:
+            if exc.response.status_code in [400, 401, 403, 404]:
+                return False
+            if exc.response.status_code >= 500:
+                return True
+    
+    # Rate Limits
+    if "Rate limit exceeded" in str(exc):
+        return True # Retry later when bucket refills
         
-    structured_log(logger, logging.INFO, "task_execution_completed", task_id=self.request.id)
-    return result_state
+    # Default to retry for safety unless explicitly known non-retryable
+    return True
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
+def send_whatsapp_notification_task(self, key_data: dict, app_name: str):
+    """
+    Dedicated parallel task for WhatsApp delivery.
+    """
+    key_id = key_data.get("id")
+    target = str(key_data.get("whatsapp_number", "unknown"))
+    structured_log(logger, logging.INFO, "whatsapp_task_started", task_id=self.request.id, key_id=key_id, target=target)
+    
+    try:
+        status = NotificationService.send_whatsapp_license_sync(key_data, app_name)
+        
+        if key_id and status == "sent":
+            import asyncio
+            async def update_db():
+                async with remote_session() as db:
+                    await AdminRepo.update_key_notification_status(db, uuid.UUID(key_id), "whatsapp", "sent")
+            asyncio.run(update_db())
+            
+        return {"status": status}
+        
+    except Exception as e:
+        retryable = is_retryable_exception(e)
+        structured_log(logger, logging.WARNING, "whatsapp_task_error", 
+                       task_id=self.request.id, attempt=self.request.retries + 1, 
+                       retryable=retryable, error=str(e), target=target)
+        
+        if retryable:
+            try:
+                raise self.retry(exc=e)
+            except MaxRetriesExceededError:
+                pass # Fall through to DLQ
+        
+        # DLQ Event (Permanent failure or Retries Exhausted)
+        persist_dlq_entry_sync(
+            channel="whatsapp",
+            target=target,
+            payload=key_data,
+            error=str(e),
+            retry_count=self.request.retries,
+            notification_type="license_generation",
+            can_retry=retryable,
+            message_content=key_data.get("message")
+        )
+        metrics.NOTIFICATION_DLQ_TOTAL.labels(channel="whatsapp").inc()
+        
+        if key_id:
+            import asyncio
+            async def update_db_fail():
+                async with remote_session() as db:
+                    await AdminRepo.update_key_notification_status(db, uuid.UUID(key_id), "whatsapp", "failed")
+            asyncio.run(update_db_fail())
+        raise
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
+def send_email_notification_task(self, key_data: dict, app_name: str):
+    """
+    Dedicated parallel task for Email delivery.
+    """
+    key_id = key_data.get("id")
+    target = str(key_data.get("email", "unknown"))
+    structured_log(logger, logging.INFO, "email_task_started", task_id=self.request.id, key_id=key_id, target=target)
+    
+    try:
+        status = NotificationService.send_email_license_sync(key_data, app_name)
+        
+        if key_id and status == "sent":
+            import asyncio
+            async def update_db():
+                async with remote_session() as db:
+                    await AdminRepo.update_key_notification_status(db, uuid.UUID(key_id), "email", "sent")
+            asyncio.run(update_db())
+            
+        return {"status": status}
+        
+    except Exception as e:
+        retryable = is_retryable_exception(e)
+        structured_log(logger, logging.WARNING, "email_task_error", 
+                       task_id=self.request.id, attempt=self.request.retries + 1, 
+                       retryable=retryable, error=str(e), target=target)
+        
+        if retryable:
+            try:
+                raise self.retry(exc=e)
+            except MaxRetriesExceededError:
+                pass # Fall through to DLQ
+
+        # DLQ Event
+        persist_dlq_entry_sync(
+            channel="email",
+            target=target,
+            payload=key_data,
+            error=str(e),
+            retry_count=self.request.retries,
+            notification_type="license_generation",
+            can_retry=retryable,
+            message_content=key_data.get("message")
+        )
+        metrics.NOTIFICATION_DLQ_TOTAL.labels(channel="email").inc()
+
+        if key_id:
+            import asyncio
+            async def update_db_fail():
+                async with remote_session() as db:
+                    await AdminRepo.update_key_notification_status(db, uuid.UUID(key_id), "email", "failed")
+            asyncio.run(update_db_fail())
+        raise

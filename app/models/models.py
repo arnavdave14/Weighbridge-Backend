@@ -76,6 +76,17 @@ class Receipt(Base):
     last_error = Column(Text, nullable=True)
     synced_at = Column(DateTime(timezone=True), nullable=True)
 
+    # TAMPER DETECTION & DATA INTEGRITY (Phase 2 Refined)
+    current_hash = Column(String(64), nullable=True, index=True)
+    previous_hash = Column(String(64), nullable=True, index=True)
+    hash_version = Column(Integer, default=1, nullable=False)
+    
+    # Append-only Correction System
+    corrected_from_id = Column(Integer, ForeignKey("receipts.id"), nullable=True, index=True)
+    correction_reason = Column(String, nullable=True)
+    
+    is_deleted = Column(Boolean, default=False, index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -148,4 +159,40 @@ class SyncQueue(Base):
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AuditLog(Base):
+    """
+    Immutable audit log for security-sensitive operations.
+    """
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    actor_type = Column(String, nullable=False)  # "USER", "SYSTEM"
+    actor_id = Column(String, nullable=True)     # employee_id or worker_id
+    action_type = Column(String, nullable=False, index=True) # CREATE, DELETE, LOGIN, OVERRIDE
+    resource_type = Column(String, nullable=False, index=True) # RECEIPT, MACHINE, AUTH
+    resource_id = Column(String, nullable=True)
+    severity = Column(String, default="INFO")    # INFO, WARNING, CRITICAL
+    metadata_json = Column(JSON, nullable=True)   # before/after snapshots, client info
+    
+    # Sync status
+    is_synced = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChainCheckpoint(Base):
+    """
+    Scale-out integrity checkpoints.
+    Every N records, we store a snapshot to speed up verification for large datasets.
+    """
+    __tablename__ = "chain_checkpoints"
+
+    id = Column(Integer, primary_key=True, index=True)
+    receipt_id = Column(Integer, ForeignKey("receipts.id"), nullable=False, index=True)
+    checkpoint_index = Column(Integer, nullable=False, index=True)
+    checkpoint_hash = Column(String(64), nullable=False)
+    previous_checkpoint_hash = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 

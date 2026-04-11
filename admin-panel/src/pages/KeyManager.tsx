@@ -221,6 +221,7 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     phone: '', mobile_number: '', whatsapp_number: '', address: '', labels: [] as CustomLabel[],
     bill_header_1: '', bill_header_2: '', bill_header_3: '', bill_footer: '',
     logo_url: '', signup_image_url: '',
+    notification_type: 'both' as 'whatsapp' | 'email' | 'both',
   })
 
   const handleSubmit = async (e: FormEvent) => {
@@ -391,6 +392,25 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                     />
                   </div>
                   <div><label className="form-label">Key Count</label><input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" /></div>
+                  <div className="col-span-2">
+                    <label className="form-label">Notification Channel</label>
+                    <div className="flex gap-2">
+                      {['both', 'whatsapp', 'email'].map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => setForm({ ...form, notification_type: type as any })}
+                          className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold capitalize transition-all border ${
+                            form.notification_type === type 
+                              ? 'bg-brand-600 border-brand-600 text-white shadow-lg shadow-brand-200' 
+                              : 'bg-white border-surface-200 text-surface-600 hover:border-brand-200'
+                          }`}
+                        >
+                          {type}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="pt-4 flex gap-3 sticky bottom-0 backdrop-blur-sm pb-2">

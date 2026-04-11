@@ -10,13 +10,24 @@ from datetime import datetime
 class AppCreate(BaseModel):
     app_name: str
     description: Optional[str] = None
+    whatsapp_sender_channel: Optional[str] = None
+    email_sender: Optional[str] = None
+
+
+class AppUpdate(BaseModel):
+    app_name: Optional[str] = None
+    description: Optional[str] = None
+    whatsapp_sender_channel: Optional[str] = None
+    email_sender: Optional[str] = None
 
 
 class AppRead(BaseModel):
     id: UUID4
     app_id: str
     app_name: str
-    description: Optional[str]
+    description: Optional[str] = None
+    whatsapp_sender_channel: Optional[str] = None
+    email_sender: Optional[str] = None
     created_at: datetime
     keys_count: int = 0
 
@@ -57,6 +68,7 @@ class ActivationKeyCreate(BaseModel):
     bill_header_2: Optional[str] = None
     bill_header_3: Optional[str] = None
     # Notification / Messaging - Frontend Controlled
+    notification_type: str = "both" # whatsapp | email | both
     message: Optional[str] = None  # For WhatsApp
     subject: Optional[str] = None  # For Email
     body: Optional[str] = None     # For Email
@@ -74,7 +86,7 @@ class ActivationKeyUpdate(BaseModel):
     phone: Optional[str] = None
     mobile_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
-    labels: Optional[List[str]] = None
+    labels: Optional[List[CustomLabel]] = None
     bill_header_1: Optional[str] = None
     bill_header_2: Optional[str] = None
     bill_header_3: Optional[str] = None
@@ -87,23 +99,24 @@ class ActivationKeyRead(BaseModel):
     id: UUID4
     app_id: UUID4
     token: str
-    labels: Optional[List[CustomLabel]] = []
+    company_name: str
     status: str
     expiry_date: datetime
     created_at: datetime
-    company_name: str
-    logo_url: Optional[str]
-    signup_image_url: Optional[str]
-    email: Optional[str]
-    address: Optional[str]
-    phone: Optional[str]
-    mobile_number: Optional[str]
-    whatsapp_number: Optional[str]
-    labels: Optional[List[str]]
-    bill_header_1: Optional[str]
-    bill_header_2: Optional[str]
-    bill_header_3: Optional[str]
-    bill_footer: Optional[str]
+    logo_url: Optional[str] = None
+    signup_image_url: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    mobile_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    labels: Optional[List[CustomLabel]] = []
+    bill_header_1: Optional[str] = None
+    bill_header_2: Optional[str] = None
+    bill_header_3: Optional[str] = None
+    bill_footer: Optional[str] = None
+    whatsapp_status: str = "pending"
+    email_status: str = "pending"
 
     class Config:
         from_attributes = True
@@ -119,6 +132,7 @@ class NotificationRead(BaseModel):
     activation_key_id: Optional[UUID4]
     message: str
     type: str
+    notification_type: str = "general"
     created_at: datetime
 
     class Config:
@@ -135,8 +149,9 @@ class FailedNotificationRead(BaseModel):
     target: str
     payload: dict
     error_reason: Optional[str]
-    retry_count: str
+    retry_count: int
     status: str
+    notification_type: str = "general"
     failed_at: datetime
     resolved_at: Optional[datetime]
 
@@ -189,7 +204,7 @@ class HardwareActivationResponse(BaseModel):
     token: str
     company_name: str
     expiry_date: datetime
-    labels: List[str]
+    labels: List[CustomLabel]
     bill_header_1: Optional[str]
     bill_header_2: Optional[str]
     bill_header_3: Optional[str]

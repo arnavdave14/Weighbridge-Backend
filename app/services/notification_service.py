@@ -10,6 +10,9 @@ from app.core.metrics import metrics
 from app.core.log_utils import structured_log
 from app.core.rate_limiter import rate_limiter
 from app.config.settings import settings
+from app.config.settings import settings
+from app.database.postgres import remote_session
+from app.repositories.admin_repo import AdminRepo
 
 logger = logging.getLogger("notification_service")
 
@@ -73,6 +76,78 @@ class NotificationService:
             # I will refactor the safe handlers to raise if they fail, or return their channel.
 
     @staticmethod
+    def send_whatsapp_license_sync(key_data: Dict[str, Any], app_name: str) -> str:
+        """Synchronous wrapper for WhatsApp only."""
+        return asyncio.run(NotificationService._send_whatsapp_license_async(key_data, app_name))
+
+    @staticmethod
+    def send_email_license_sync(key_data: Dict[str, Any], app_name: str) -> str:
+        """Synchronous wrapper for Email only."""
+        return asyncio.run(NotificationService._send_email_license_async(key_data, app_name))
+
+    @staticmethod
+    async def _send_whatsapp_license_async(key_data: Dict[str, Any], app_name: str) -> str:
+        phone = key_data.get("whatsapp_number")
+        if not phone: return "skipped"
+        
+        _, is_valid_phone = NotificationService.validate_contact_info(None, phone)
+        if not is_valid_phone: return "invalid_contact"
+
+        # Rate Limit
+        company_name = key_data.get("company_name", "unknown")
+        is_allowed, _ = rate_limiter.check(f"notify:{company_name}", settings.NOTIFICATION_RATE_LIMIT_PER_MINUTE)
+        if not is_allowed: return "rate_limited"
+
+        start_time = time.time()
+        try:
+            sender_channel = None
+            app_id_str = key_data.get("app_id_str")
+            if app_id_str:
+                async with remote_session() as db:
+                    app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
+                    if app: sender_channel = app.whatsapp_sender_channel
+
+            await NotificationService._send_whatsapp_safe(phone, key_data, app_name, sender_channel=sender_channel)
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="sent").inc()
+            return "sent"
+        except Exception as e:
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="failed").inc()
+            raise e
+        finally:
+            metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel="whatsapp").observe(time.time() - start_time)
+
+    @staticmethod
+    async def _send_email_license_async(key_data: Dict[str, Any], app_name: str) -> str:
+        email = key_data.get("email")
+        if not email: return "skipped"
+        
+        is_valid_email, _ = NotificationService.validate_contact_info(email, None)
+        if not is_valid_email: return "invalid_contact"
+
+        # Rate Limit
+        company_name = key_data.get("company_name", "unknown")
+        is_allowed, _ = rate_limiter.check(f"notify:{company_name}", settings.NOTIFICATION_RATE_LIMIT_PER_MINUTE)
+        if not is_allowed: return "rate_limited"
+
+        start_time = time.time()
+        try:
+            sender_name = None
+            app_id_str = key_data.get("app_id_str")
+            if app_id_str:
+                async with remote_session() as db:
+                    app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
+                    if app: sender_name = app.email_sender
+
+            await NotificationService._send_email_safe(email, key_data, app_name, sender_name=sender_name)
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="sent").inc()
+            return "sent"
+        except Exception as e:
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="failed").inc()
+            raise e
+        finally:
+            metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel="email").observe(time.time() - start_time)
+
+    @staticmethod
     def notify_license_generation_sync(
         key_data: Dict[str, Any],
         app_name: str,
@@ -85,69 +160,130 @@ class NotificationService:
         return asyncio.run(NotificationService._notify_license_generation_async_orchestrated(key_data, app_name, skip_channels))
 
     @staticmethod
+    async def is_idempotent_duplicate(idempotency_key: str) -> bool:
+        """Checks Redis for an existing idempotency key. Resilient to Redis failure."""
+        from app.core.rate_limiter import rate_limiter
+        import redis
+        try:
+            r = rate_limiter.redis_client
+            full_key = f"notif_idempotency:{idempotency_key}"
+            # Returns True if set (not duplicate), False if already exists (duplicate)
+            is_new = r.set(full_key, "1", ex=settings.NOTIF_IDEMPOTENCY_WINDOW, nx=True)
+            return not is_new
+        except redis.RedisError as e:
+            logger.error(f"Redis Error in idempotency check: {e}. Defaulting to NOT duplicate.")
+            return False
+
+    @staticmethod
     async def _notify_license_generation_async_orchestrated(
         key_data: Dict[str, Any],
         app_name: str,
         skip_channels: list = None
     ) -> Dict[str, Any]:
+        from app.core.log_utils import generate_idempotency_key, mask_phone, mask_email
+        
         email = key_data.get("email")
         phone = key_data.get("whatsapp_number")
-        
+        key_id = key_data.get("id", "unknown")
+        company_name = key_data.get("company_name", "unknown")
+
         skip = skip_channels or []
         is_valid_email, is_valid_phone = NotificationService.validate_contact_info(email, phone)
         
         result_state = {
             "success": [],
-            "failed": {}
+            "failed": {},
+            "skipped": []
         }
 
-        # Sequential await here is safer for exact error tracing than gather
-        # and performance is acceptable for background workers processing singular jobs.
-        
-        # 1. Check Rate Limit (Tenant-scoped)
-        company_name = key_data.get("company_name", "unknown")
-        is_allowed, remaining = rate_limiter.check(
-            f"notify:{company_name}", 
-            settings.NOTIFICATION_RATE_LIMIT_PER_MINUTE
-        )
-        
-        if not is_allowed:
-            error_msg = f"Rate limit exceeded for tenant: {company_name}"
-            structured_log(logger, logging.WARNING, "rate_limit_exceeded", channel="all", target=company_name, error_message=error_msg)
-            result_state["failed"]["rate_limit"] = error_msg
-            return result_state
+        # 1. Validation Logic: Isoalted per channel
+        # Email Check
+        if "email" not in skip:
+            if not email:
+                result_state["skipped"].append("email")
+            elif not is_valid_email:
+                result_state["failed"]["email"] = "Invalid email format"
+                structured_log(logger, logging.WARNING, "validation_failure", channel="email", target=email, error_message="Invalid email format")
+            
+        # WhatsApp Check
+        if "whatsapp" not in skip:
+            if not phone:
+                result_state["skipped"].append("whatsapp")
+            elif not is_valid_phone:
+                result_state["failed"]["whatsapp"] = "Invalid phone format (10-15 digits)"
+                structured_log(logger, logging.WARNING, "validation_failure", channel="whatsapp", target=phone, error_message="Invalid phone format")
 
-        if is_valid_email and "email" not in skip:
+        # 2. Hardening: Idempotency & Rate Limiting (Batch)
+        # We only check for channels that passed validation and aren't skipped
+        active_channels = []
+        if is_valid_phone and "whatsapp" not in skip and "whatsapp" not in result_state["failed"]:
+            active_channels.append(("whatsapp", phone))
+        if is_valid_email and "email" not in skip and "email" not in result_state["failed"]:
+            active_channels.append(("email", email))
+
+        for channel, target in active_channels:
+            # A. Idempotency Check
+            idem_key = generate_idempotency_key(str(key_id), target, key_data.get("message", ""))
+            if await NotificationService.is_idempotent_duplicate(idem_key):
+                structured_log(logger, logging.INFO, "idempotency_skip", channel=channel, target=target, key_id=key_id)
+                result_state["skipped"].append(channel)
+                continue
+
+            # B. Rate Limiting Check (Multi-Level)
+            # Tenant level + Receiver level
+            checks = [
+                (f"tenant:{company_name}", settings.RATE_LIMIT_TENANT, 60),
+                (f"receiver:{target}", settings.RATE_LIMIT_RECEIVER, 60)
+            ]
+            allowed, results = rate_limiter.check_multi(checks)
+            
+            if not allowed:
+                tenant_allowed, _ = results[0]
+                receiver_allowed, _ = results[1]
+                error_msg = "Rate limit exceeded"
+                if not tenant_allowed: error_msg += " (Tenant)"
+                if not receiver_allowed: error_msg += " (Receiver)"
+                
+                structured_log(logger, logging.WARNING, "rate_limit_exceeded", channel=channel, target=target, error_message=error_msg)
+                result_state["failed"][channel] = error_msg
+                continue
+
+            # 3. Execution (Sequential inside worker is fine)
             start_time = time.time()
             try:
-                await NotificationService._send_email_safe(email, key_data, app_name)
-                result_state["success"].append("email")
-                metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="sent").inc()
-            except Exception as e:
-                result_state["failed"]["email"] = str(e)
-                metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="failed").inc()
-            finally:
-                metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel="email").observe(time.time() - start_time)
+                if channel == "whatsapp":
+                    sender_channel = None
+                    app_id_str = key_data.get("app_id_str")
+                    if app_id_str:
+                        async with remote_session() as db:
+                            app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
+                            if app: sender_channel = app.whatsapp_sender_channel
+                    await NotificationService._send_whatsapp_safe(target, key_data, app_name, sender_channel=sender_channel)
                 
-        if is_valid_phone and "whatsapp" not in skip:
-            start_time = time.time()
-            try:
-                await NotificationService._send_whatsapp_safe(phone, key_data, app_name)
-                result_state["success"].append("whatsapp")
-                metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="sent").inc()
-            except Exception as e:
-                result_state["failed"]["whatsapp"] = str(e)
-                metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="failed").inc()
-            finally:
-                metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel="whatsapp").observe(time.time() - start_time)
+                elif channel == "email":
+                    sender_name = None
+                    app_id_str = key_data.get("app_id_str")
+                    if app_id_str:
+                        async with remote_session() as db:
+                            app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
+                            if app: sender_name = app.email_sender
+                    await NotificationService._send_email_safe(target, key_data, app_name, sender_name=sender_name)
                 
+                result_state["success"].append(channel)
+                metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status="sent").inc()
+            except Exception as e:
+                result_state["failed"][channel] = str(e)
+                metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status="failed").inc()
+            finally:
+                metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel=channel).observe(time.time() - start_time)
+
         return result_state
             
     @staticmethod
-    async def _send_email_safe(email: str, key_data: Dict[str, Any], app_name: str):
+    async def _send_email_safe(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None):
         structured_log(logger, logging.INFO, "notification_initiated", channel="email", target=email)
         
-        result = await email_service.send_license_email(email, key_data, app_name)
+        result = await email_service.send_license_email(email, key_data, app_name, sender_name=sender_name)
         
         if result.get("status") == "failed":
             error_msg = result.get("reason", "Unknown API error")
@@ -157,10 +293,10 @@ class NotificationService:
         structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, result=result)
 
     @staticmethod
-    async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str):
+    async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: str = None):
         structured_log(logger, logging.INFO, "notification_initiated", channel="whatsapp", target=phone)
         
-        result = await whatsapp_service.send_license_whatsapp(phone, key_data, app_name)
+        result = await whatsapp_service.send_license_whatsapp(phone, key_data, app_name, sender_channel=sender_channel)
         
         if result.get("status") == "failed":
             error_msg = result.get("message", "Unknown API error")

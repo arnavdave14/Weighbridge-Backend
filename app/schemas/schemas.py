@@ -51,6 +51,10 @@ class ReceiptBase(BaseModel):
     # Employee linkage: set by Flutter from the logged-in employee's JWT.
     # Optional for backward compatibility — existing clients not sending this
     # field will produce receipts with user_id = NULL (still valid).
+    # Correction metadata
+    corrected_from_id: Optional[int] = None
+    correction_reason: Optional[str] = None
+    
     user_id: Optional[str] = None
 
 

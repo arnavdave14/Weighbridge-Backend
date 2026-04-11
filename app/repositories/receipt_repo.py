@@ -23,8 +23,26 @@ class ReceiptRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_all(db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Receipt]:
-        result = await db.execute(select(Receipt).offset(skip).limit(limit))
+    async def get_all(
+        db: AsyncSession, 
+        skip: int = 0, 
+        limit: int = 100, 
+        include_history: bool = False
+    ) -> List[Receipt]:
+        """
+        Fetches receipts. If include_history=False, only returns "effective" records
+        (those that haven't been corrected/superceded).
+        """
+        stmt = select(Receipt)
+        
+        if not include_history:
+            # Subquery to find all IDs that have been corrected
+            corrected_ids_stmt = select(Receipt.corrected_from_id).where(Receipt.corrected_from_id.isnot(None))
+            # Filter out records whose ID is in the "corrected_from_id" list
+            stmt = stmt.where(Receipt.id.not_in(corrected_ids_stmt))
+            
+        stmt = stmt.offset(skip).limit(limit).order_by(Receipt.id.desc())
+        result = await db.execute(stmt)
         return result.scalars().all()
 
     @staticmethod

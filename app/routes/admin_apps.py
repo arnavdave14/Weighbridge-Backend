@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db_manager import get_remote_db
 from app.api.admin_deps import get_current_admin
 from app.schemas.admin_schemas import (
-    AppCreate, AppRead,
+    AppCreate, AppRead, AppUpdate,
     ActivationKeyCreate, ActivationKeyRead, ActivationKeyUpdate,
     DashboardStats
 )
@@ -60,6 +60,17 @@ async def list_apps(
 ):
     """List all active software products."""
     return await AdminAppService.list_apps(db)
+
+
+@router.patch("/{app_id}", response_model=AppRead)
+async def update_app(
+    app_id: uuid.UUID,
+    app_update: AppUpdate,
+    db: AsyncSession = Depends(get_remote_db),
+    _: dict = Depends(get_current_admin)
+):
+    """Update application details, including notification sender identities."""
+    return await AdminAppService.update_app(db, app_id, app_update)
 
 
 @router.delete("/{app_id}")
@@ -119,13 +130,23 @@ async def generate_activation_keys(
         status_msg = "skipped"
 
     for key_data in generated_keys:
-        key_data["notification_status"] = status_msg
+        key_data["notification_status"] = "queued"
         
-        # Dispatch Celery background task for robust delivery via Redis queue
-        if is_valid_email or is_valid_phone:
-            from app.tasks.notification_tasks import send_notification_task
-            send_notification_task.delay(
-                key_data=key_data,
+        # Determine notification targets
+        notif_type = key_in.notification_type or "both"
+        
+        # Parallel dispatch via Celery pool
+        if notif_type in ["whatsapp", "both"] and key_in.whatsapp_number:
+            from app.tasks.notification_tasks import send_whatsapp_notification_task
+            send_whatsapp_notification_task.delay(
+                key_data=key_data, 
+                app_name=app_name
+            )
+            
+        if notif_type in ["email", "both"] and key_in.email:
+            from app.tasks.notification_tasks import send_email_notification_task
+            send_email_notification_task.delay(
+                key_data=key_data, 
                 app_name=app_name
             )
 
@@ -177,7 +198,7 @@ async def update_key_details(
     return await AdminAppService.update_key(db, key_uuid, update_in)
 
 
-@router.delete("/keys/{key_uuid}")
+@router.delete("/keys/{key_uuid}/revoke")
 async def revoke_key(
     key_uuid: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),

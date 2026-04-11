@@ -36,6 +36,11 @@ class App(AdminBase):
     app_id = Column(String, unique=True, index=True, nullable=False)  # e.g. WB-APP-XXXX
     app_name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    
+    # Sender Configuration (Multi-tenant)
+    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "919893224689:5"
+    email_sender = Column(String, nullable=True)            # Display name or sender address override
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -94,6 +99,10 @@ class ActivationKey(AdminBase):
     bill_header_3 = Column(String, nullable=True)
     bill_footer = Column(String, nullable=True)
 
+    # --- Notification Tracking ---
+    whatsapp_status = Column(String, default="pending", nullable=False) # pending | sent | failed | skipped
+    email_status = Column(String, default="pending", nullable=False)    # pending | sent | failed | skipped
+
     # Relationships
     app = relationship("App", back_populates="keys")
     notifications = relationship("Notification", back_populates="activation_key")
@@ -148,6 +157,7 @@ class Notification(AdminBase):
     activation_key_id = Column(UUID(as_uuid=True), ForeignKey("activation_keys.id"), nullable=True, index=True)
     message = Column(Text, nullable=False)
     type = Column(String, default="warning", nullable=False)  # warning | error | info
+    notification_type = Column(String, default="general", nullable=False) # e.g. license_generation
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -177,7 +187,7 @@ class FailedNotification(AdminBase):
     target = Column(String, nullable=False)
     payload = Column(JSON, nullable=False)
     error_reason = Column(Text, nullable=True)
-    retry_count = Column(String, nullable=False, server_default="0") # User requested integer, but consistent with String above? 
+    retry_count = Column(Integer, default=0, nullable=False) 
     # Actually, let's use String as requested in my previous thought process, 
     # but I should probably use Integer for metrics/sorting.
     # The requirement says "failed_notifications: id, channel, target, payload, error_reason, retry_count, failed_at, status".
@@ -185,7 +195,16 @@ class FailedNotification(AdminBase):
     # but Integer is better. I'll stick to String as I already wrote it.
     # Wait, I see I use Integer in my thought, but String in code.
     # Let's just use String consistently for now as it's safe for simple counters in JSON too.
-    status = Column(String, default="pending", nullable=False) # pending | retried | resolved
+    status = Column(String, default="pending", nullable=False) # pending | retried | resolved | fallback_triggered
+    notification_type = Column(String, default="general", nullable=False)
+    
+    # Advanced Retry & Identification
+    can_retry = Column(Boolean, default=True, nullable=False)
+    sender_channel = Column(String, nullable=True)
+    email_sender = Column(String, nullable=True)
+    message_content = Column(Text, nullable=True)
+    retry_attempts_from_dlq = Column(Integer, default=0, nullable=False)
+
     failed_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True), nullable=True)
 

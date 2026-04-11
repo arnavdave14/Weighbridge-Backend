@@ -11,9 +11,9 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.admin_repo import AdminRepo
-from app.schemas.admin_schemas import AppCreate, ActivationKeyCreate, ActivationKeyUpdate
+from app.schemas.admin_schemas import AppCreate, AppUpdate, ActivationKeyCreate, ActivationKeyUpdate
 from app.core.security import get_password_hash, verify_password
-from app.models.admin_models import ActivationKeySchema
+from app.models.admin_models import App, ActivationKey, ActivationKeySchema
 from app.core.validation_engine import get_etag
 
 logger = logging.getLogger(__name__)
@@ -38,13 +38,14 @@ class AdminAppService:
     # ─────────────────────────────────────────
 
     @staticmethod
-    async def create_app(db: AsyncSession, app_in: AppCreate):
-        app_id_str = _generate_app_id()
+    async def create_app(db: AsyncSession, app_in: AppCreate) -> App:
         return await AdminRepo.create_app(
-            db,
-            app_id=app_id_str,
-            app_name=app_in.app_name,
-            description=app_in.description
+            db, 
+            app_id=app_in.app_id if hasattr(app_in, 'app_id') else f"WB-APP-{uuid.uuid4().hex[:6].upper()}", 
+            app_name=app_in.app_name, 
+            description=app_in.description,
+            whatsapp_sender_channel=app_in.whatsapp_sender_channel,
+            email_sender=app_in.email_sender
         )
 
     @staticmethod
@@ -61,6 +62,15 @@ class AdminAppService:
     @staticmethod
     async def get_app_history(db: AsyncSession):
         return await AdminRepo.get_deleted_apps(db)
+
+    @staticmethod
+    async def update_app(db: AsyncSession, app_id: uuid.UUID, app_update: "AppUpdate") -> App:
+        db_app = await AdminRepo.get_app_by_uuid(db, app_id)
+        if not db_app:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        update_data = app_update.model_dump(exclude_unset=True)
+        return await AdminRepo.update_app(db, db_app, update_data)
 
     # ─────────────────────────────────────────
     # ActivationKey (Company License) Operations
@@ -99,7 +109,7 @@ class AdminAppService:
                 phone=key_in.phone,
                 mobile_number=key_in.mobile_number,
                 whatsapp_number=key_in.whatsapp_number,
-                labels=key_in.labels or [],
+                labels=[label.model_dump() for label in key_in.labels] if key_in.labels else [],
                 bill_header_1=key_in.bill_header_1,
                 bill_header_2=key_in.bill_header_2,
                 bill_header_3=key_in.bill_header_3,
@@ -111,8 +121,8 @@ class AdminAppService:
             schema_v1 = ActivationKeySchema(
                 activation_key_id=db_key.id,
                 version=1,
-                labels=initial_labels,
-                etag=get_etag(initial_labels)
+                labels=db_key.labels,  # Use the already converted list from db_key
+                etag=get_etag(db_key.labels)
             )
             db.add(schema_v1)
 
@@ -127,6 +137,7 @@ class AdminAppService:
                 "message": key_in.message,
                 "subject": key_in.subject,
                 "body": key_in.body,
+                "app_id_str": app.app_id
             })
 
         return generated
@@ -143,7 +154,9 @@ class AdminAppService:
         # Versioning Trigger: If labels change, increment version and create snapshot
         if "labels" in update_data and update_data["labels"] != key.labels:
             key.current_version += 1
-            new_labels = update_data["labels"]
+            new_labels_raw = update_data["labels"]
+            # Ensure labels are serialized as dicts, not Pydantic objects
+            new_labels = [label.model_dump() if hasattr(label, 'model_dump') else label for label in new_labels_raw]
             
             new_schema_version = ActivationKeySchema(
                 activation_key_id=key.id,
@@ -151,6 +164,7 @@ class AdminAppService:
                 labels=new_labels,
                 etag=get_etag(new_labels)
             )
+            update_data["labels"] = new_labels # Update the data passed to setattr later
             db.add(new_schema_version)
 
         for field, value in update_data.items():
@@ -224,7 +238,8 @@ class AdminAppService:
             await AdminRepo.create_notification(
                 db,
                 message=f"Invalid activation key attempted: key does not exist.",
-                notif_type="error"
+                notif_type="error",
+                notification_type="hardware_activation_failure"
             )
             raise HTTPException(status_code=401, detail="Invalid activation key")
 
@@ -239,6 +254,7 @@ class AdminAppService:
                     f"but device requested '{requested_app_id_str}'."
                 ),
                 notif_type="error",
+                notification_type="hardware_activation_mismatch",
                 app_id=app.id if app else None,
                 activation_key_id=matched_key.id,
             )
@@ -252,6 +268,7 @@ class AdminAppService:
                 db,
                 message=f"Attempt to use {matched_key.status} key for company '{matched_key.company_name}'.",
                 notif_type="warning",
+                notification_type="hardware_activation_status_locked",
                 app_id=matched_key.app_id,
                 activation_key_id=matched_key.id,
             )
@@ -307,6 +324,7 @@ class AdminAppService:
                         f"linked to '{matched_key.company_name}'."
                     ),
                     notif_type="info",
+                    notification_type="hardware_activation_success",
                     app_id=app.id,
                     activation_key_id=matched_key.id,
                 )

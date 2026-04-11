@@ -60,6 +60,7 @@ async def send_whatsapp(
     message: Optional[str] = None,
     pdf_content: Optional[bytes] = None,
     filename: Optional[str] = None,
+    sender_channel: Optional[str] = None,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -79,6 +80,11 @@ async def send_whatsapp(
         "mobile": clean_phone,
         "msg": message or (f"Receipt {filename}" if filename else "Weighbridge Receipt"),
     }
+    
+    if sender_channel:
+        # Per DigitalSMS dashboard, 'sender_channel' is used to specify the sending device
+        params["channel"] = sender_channel
+        logger.info(f"[WA] Routing via channel: {sender_channel}")
 
     if pdf_content and len(pdf_content) > 2 * 1024 * 1024:
         logger.error(f"[RT-{receipt_id}] PDF size too large: {len(pdf_content)} bytes (max 2MB)")
@@ -158,7 +164,7 @@ async def send_whatsapp_message(receipt_id: int, phone: str, **kwargs) -> Dict[s
 async def send_whatsapp_pdf(phone: str, pdf_content: bytes, filename: str, receipt_id: int = 0, caption: Optional[str] = None) -> Dict[str, Any]:
     return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=caption, pdf_content=pdf_content, filename=filename)
 
-async def send_license_whatsapp(phone: str, key_data: Dict[str, Any], app_name: str) -> Dict[str, Any]:
+async def send_license_whatsapp(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: Optional[str] = None) -> Dict[str, Any]:
     """
     Sends a WhatsApp message containing the content provided in key_data['message'].
     """
@@ -167,5 +173,5 @@ async def send_license_whatsapp(phone: str, key_data: Dict[str, Any], app_name: 
         logger.error(f"License WhatsApp skipped: No message content provided.")
         return {}
 
-    await send_whatsapp(phone=phone, message=msg)
+    await send_whatsapp(phone=phone, message=msg, sender_channel=sender_channel)
     return {}

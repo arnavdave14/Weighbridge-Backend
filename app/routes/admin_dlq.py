@@ -6,7 +6,7 @@ import uuid
 from app.database.db_manager import get_remote_db
 from app.repositories.admin_repo import AdminRepo
 from app.schemas.admin_schemas import FailedNotificationRead
-from app.tasks.notification_tasks import send_notification_task
+from app.tasks.notification_tasks import send_whatsapp_notification_task, send_email_notification_task
 
 router = APIRouter(prefix="/admin/dlq", tags=["Admin - DLQ"])
 
@@ -34,21 +34,28 @@ async def retry_failed_notification(
     if entry.status == "resolved":
         raise HTTPException(status_code=400, detail="Cannot retry a resolved notification")
 
-    # Queue back to Celery
-    # We pass skip_channels=[] to force a full retry, or we can be smart and only retry that channel.
-    # Since we store 'channel' in the record, we can retry only that channel.
-    skip_channels = []
-    # If we want to retry only the channel that failed:
-    # However, the task handles multiple channels.
-    # Let's just re-dispatch the payload.
-    send_notification_task.delay(
-        key_data=entry.payload,
-        app_name="Retried via Admin Panel",
-        skip_channels=[] # Full retry
-    )
+    if not entry.can_retry:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"This notification is marked as non-retryable. Reason: {entry.error_reason}"
+        )
+
+    # Queue back to Celery based on channel
+    if entry.channel == "whatsapp":
+        send_whatsapp_notification_task.delay(
+            key_data=entry.payload,
+            app_name="Retried via Admin Panel (WhatsApp)"
+        )
+    elif entry.channel == "email":
+        send_email_notification_task.delay(
+            key_data=entry.payload,
+            app_name="Retried via Admin Panel (Email)"
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown channel: {entry.channel}")
     
-    await AdminRepo.update_dlq_status(db, entry, "retried")
-    return {"message": "Notification queued for retry", "id": entry_id}
+    await AdminRepo.update_dlq_retry_stats(db, entry)
+    return {"message": "Notification queued for retry", "id": entry_id, "retry_attempts": entry.retry_attempts_from_dlq + 1}
 
 @router.patch("/{entry_id}/resolve")
 async def resolve_failed_notification(

@@ -13,31 +13,40 @@ class RateLimiter:
         self.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
     def check(self, key: str, limit: int, window_seconds: int = 60) -> tuple[bool, int]:
+        """Legacy single check."""
+        allowed, results = self.check_multi([(key, limit, window_seconds)])
+        return allowed, results[0][1]
+
+    def check_multi(self, checks: list[tuple[str, int, int]]) -> tuple[bool, list[tuple[bool, int]]]:
         """
-        Checks if the rate limit is exceeded for the key.
-        Returns: (is_allowed, remaining_quota)
+        Atomically checks multiple rate limits.
+        checks: list of (key, limit, window_seconds)
+        Returns: (overall_allowed, list of (is_allowed, remaining))
         """
-        # Key format: ratelimit:{key}
-        full_key = f"ratelimit:{key}"
-        
         try:
-            # Use pipeline for atomic increment and expire
             pipe = self.redis_client.pipeline()
-            pipe.incr(full_key)
-            pipe.expire(full_key, window_seconds, nx=True) # set expire only if key is new
+            for key, _, window in checks:
+                full_key = f"ratelimit:{key}"
+                pipe.incr(full_key)
+                pipe.expire(full_key, window, nx=True)
+            
             results = pipe.execute()
             
-            count = results[0]
-            remaining = max(0, limit - count)
+            check_results = []
+            overall_allowed = True
             
-            if count > limit:
-                return False, 0
+            for i, (key, limit, _) in enumerate(checks):
+                count = results[i*2] # INCR result
+                remaining = max(0, limit - count)
+                is_allowed = count <= limit
+                if not is_allowed:
+                    overall_allowed = False
+                check_results.append((is_allowed, remaining))
                 
-            return True, remaining
+            return overall_allowed, check_results
             
         except redis.RedisError:
-            # On redis error, we default to allowing to avoid blocking critical notifications
-            # but log the failure in the calling service.
-            return True, -1
+            # Fallback to allow
+            return True, [(True, -1)] * len(checks)
 
 rate_limiter = RateLimiter()

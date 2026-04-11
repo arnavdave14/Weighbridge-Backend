@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type FormEvent, useCallback, memo, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, AppWindow, X, Loader2, ChevronRight, Trash2, Filter, Calendar, KeyRound } from 'lucide-react'
+import { Plus, AppWindow, X, Loader2, ChevronRight, Trash2, Filter, Calendar, KeyRound, RefreshCw } from 'lucide-react'
 import api from '../services/api'
 import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useToast } from '../context/ToastContext'
@@ -11,6 +11,8 @@ interface App {
   app_id: string
   app_name: string
   description?: string
+  whatsapp_sender_channel?: string
+  email_sender?: string
   created_at: string
   keys_count: number
 }
@@ -25,7 +27,12 @@ const COLORS = [
 
 // --- Sub-components ---
 
-const AppCard = memo(({ app, index, onDelete }: { app: App; index: number; onDelete: (id: string, name: string) => void }) => {
+const AppCard = memo(({ app, index, onDelete, onEdit }: { 
+  app: App; 
+  index: number; 
+  onDelete: (id: string, name: string) => void;
+  onEdit: (app: App) => void;
+}) => {
   const navigate = useNavigate()
   return (
     <motion.div
@@ -48,6 +55,18 @@ const AppCard = memo(({ app, index, onDelete }: { app: App; index: number; onDel
         <Trash2 className="w-4 h-4" />
       </button>
 
+      {/* Edit Button */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onEdit(app)
+        }}
+        className="absolute top-4 right-14 p-2 rounded-xl bg-white/50 text-indigo-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-indigo-50 hover:text-indigo-600 z-10"
+        title="Edit Application"
+      >
+        <Plus className="w-4 h-4 rotate-45" /> {/* Using Plus rotated as a pencil/edit icon alternative since Lucide Pencil isn't imported yet, or I can just import it */}
+      </button>
+
       <div className="p-5">
         <div className="flex items-start gap-4">
           <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${COLORS[index % COLORS.length]} flex items-center justify-center shrink-0 shadow-md text-white text-lg font-bold`}>
@@ -67,6 +86,20 @@ const AppCard = memo(({ app, index, onDelete }: { app: App; index: number; onDel
                 {app.keys_count} {app.keys_count === 1 ? 'License' : 'Licenses'}
               </span>
             </div>
+            {(app.whatsapp_sender_channel || app.email_sender) && (
+              <div className="flex items-center gap-2 mt-2 opacity-70">
+                {app.whatsapp_sender_channel && (
+                  <span className="text-[9px] font-mono bg-surface-100 px-1 py-0.5 rounded text-surface-600">
+                    WA: {app.whatsapp_sender_channel}
+                  </span>
+                )}
+                {app.email_sender && (
+                  <span className="text-[9px] font-mono bg-surface-100 px-1 py-0.5 rounded text-surface-600">
+                    Email: {app.email_sender}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-surface-100">
@@ -85,31 +118,54 @@ const AppCard = memo(({ app, index, onDelete }: { app: App; index: number; onDel
   )
 })
 
-const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: () => void }) => {
+const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  onSuccess: () => void;
+  initialData?: App | null;
+}) => {
   const toast = useToast()
-  const [form, setForm] = useState({ app_name: '', description: '' })
+  const [form, setForm] = useState({ 
+    app_name: '', 
+    description: '', 
+    whatsapp_sender_channel: '', 
+    email_sender: '' 
+  })
   const [saving, setSaving] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (isOpen) {
+      if (initialData) {
+        setForm({
+          app_name: initialData.app_name,
+          description: initialData.description || '',
+          whatsapp_sender_channel: initialData.whatsapp_sender_channel || '',
+          email_sender: initialData.email_sender || ''
+        })
+      }
       setTimeout(() => nameRef.current?.focus(), 100)
     } else {
-      setForm({ app_name: '', description: '' })
+      setForm({ app_name: '', description: '', whatsapp_sender_channel: '', email_sender: '' })
     }
-  }, [isOpen])
+  }, [isOpen, initialData])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.post('/apps', form)
-      toast.success(`Application "${form.app_name}" created successfully!`)
+      if (initialData) {
+        // We need a PATCH endpoint for apps, checking if it exists
+        await api.patch(`/apps/${initialData.id}`, form)
+        toast.success(`Application "${form.app_name}" updated!`)
+      } else {
+        await api.post('/apps', form)
+        toast.success(`Application "${form.app_name}" created!`)
+      }
       onSuccess()
       onClose()
     } catch (err: any) {
-      console.error('[AppsManager: CreateApp] Failed:', err)
-      toast.error(err.response?.data?.detail || 'Failed to create application.')
+      toast.error(err.response?.data?.detail || 'Operation failed.')
     } finally {
       setSaving(false)
     }
@@ -134,7 +190,9 @@ const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean;
             className="fixed inset-y-0 right-0 z-50 w-full max-w-md glass border-l border-white/40 flex flex-col"
           >
             <div className="flex items-center justify-between px-6 py-5 border-b border-white/30">
-              <h2 className="text-lg font-bold text-surface-900">New Application</h2>
+              <h2 className="text-lg font-bold text-surface-900">
+                {initialData ? 'Edit Application' : 'New Application'}
+              </h2>
               <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-500">
                 <X className="w-4 h-4" />
               </button>
@@ -153,11 +211,27 @@ const CreateAppDrawer = memo(({ isOpen, onClose, onSuccess }: { isOpen: boolean;
                   placeholder="Optional short description…"
                   className="form-input resize-none" />
               </div>
+              <div className="pt-4 space-y-4 border-t border-white/20">
+                <p className="text-[10px] font-bold text-surface-400 uppercase tracking-widest">Notification Senders (Premium)</p>
+                <div>
+                  <label className="form-label">WhatsApp Sender Channel ID</label>
+                  <input value={form.whatsapp_sender_channel || ''}
+                    onChange={(e) => setForm({ ...form, whatsapp_sender_channel: e.target.value })}
+                    placeholder="e.g. 919893224689:5" className="form-input" />
+                  <p className="text-[9px] text-surface-400 mt-1">Found in DigitalSMS WAPP Channel list.</p>
+                </div>
+                <div>
+                  <label className="form-label">Email Sender Display Name</label>
+                  <input value={form.email_sender || ''}
+                    onChange={(e) => setForm({ ...form, email_sender: e.target.value })}
+                    placeholder="e.g. Plant-A Notifications" className="form-input" />
+                </div>
+              </div>
               <div className="pt-4 flex gap-3">
                 <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary flex-1">
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {saving ? 'Creating…' : 'Create App'}
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : (initialData ? <RefreshCw className="w-4 h-4" /> : <Plus className="w-4 h-4" />)}
+                  {saving ? (initialData ? 'Updating…' : 'Creating…') : (initialData ? 'Update App' : 'Create App')}
                 </button>
               </div>
             </form>
@@ -174,7 +248,8 @@ export default function AppsManager() {
   const toast = useToast()
   const [apps, setApps] = useState<App[]>([])
   const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
+  const [showDrawer, setShowDrawer] = useState(false)
+  const [editingApp, setEditingApp] = useState<App | null>(null)
   const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
   const [dateRange, setDateRange] = useState({ start: '', end: '' })
 
@@ -245,7 +320,7 @@ export default function AppsManager() {
               <option value="custom">Custom Date</option>
             </select>
           </div>
-          <button onClick={() => setShowCreate(true)} className="btn-primary">
+          <button onClick={() => { setEditingApp(null); setShowDrawer(true); }} className="btn-primary">
             <Plus className="w-4 h-4" /> New App
           </button>
         </div>
@@ -277,10 +352,11 @@ export default function AppsManager() {
         </motion.div>
       )}
 
-      <CreateAppDrawer 
-        isOpen={showCreate} 
-        onClose={() => setShowCreate(false)} 
+      <AppDrawer 
+        isOpen={showDrawer} 
+        onClose={() => setShowDrawer(false)} 
         onSuccess={fetchApps} 
+        initialData={editingApp}
       />
 
       {loading ? (
@@ -299,7 +375,16 @@ export default function AppsManager() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredAndSortedApps.map((app, i) => (
-            <AppCard key={app.id} app={app} index={i} onDelete={handleDelete} />
+            <AppCard 
+              key={app.id} 
+              app={app} 
+              index={i} 
+              onDelete={handleDelete} 
+              onEdit={(app) => {
+                setEditingApp(app);
+                setShowDrawer(true);
+              }}
+            />
           ))}
         </div>
       )}

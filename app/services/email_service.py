@@ -87,7 +87,7 @@ def _send_sync(msg):
         server.login(settings.SMTP_USER, settings.SMTP_PASS)
         server.send_message(msg)
 
-async def send_license_email(email: str, key_data: Dict[str, Any], app_name: str) -> Dict[str, Any]:
+async def send_license_email(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None) -> Dict[str, Any]:
     """
     Sends a license email with raw subject and body provided by the frontend.
     """
@@ -102,8 +102,9 @@ async def send_license_email(email: str, key_data: Dict[str, Any], app_name: str
         logger.error(f"License Email to {email} skipped: Missing subject or body.")
         return {}
 
+    from_name = sender_name or settings.EMAILS_FROM_NAME
     msg = MIMEMultipart()
-    msg['From'] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+    msg['From'] = f"{from_name} <{settings.EMAILS_FROM_EMAIL}>"
     msg['To'] = email
     msg['Subject'] = subject
     msg['Reply-To'] = settings.EMAILS_FROM_EMAIL
