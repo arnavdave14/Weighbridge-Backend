@@ -1,6 +1,6 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.db_manager import get_remote_db
@@ -13,6 +13,8 @@ from app.schemas.admin_schemas import (
 from app.services.admin_app_service import AdminAppService
 from app.repositories.admin_repo import AdminRepo
 from app.services.notification_service import NotificationService
+from app.models.admin_models import AdminUser
+from app.core.limiter import limiter
 
 router = APIRouter(prefix="/admin/apps", tags=["Admin — Apps"])
 
@@ -24,7 +26,7 @@ router = APIRouter(prefix="/admin/apps", tags=["Admin — Apps"])
 @router.get("/dashboard/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Aggregated counts for the admin dashboard cards."""
     return await AdminAppService.get_dashboard_stats(db)
@@ -33,7 +35,7 @@ async def get_dashboard_stats(
 @router.get("/dashboard/activity", response_model=List[dict])
 async def get_dashboard_activity(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Activations and Revocations per day for the last 10 days."""
     return await AdminAppService.get_dashboard_activity(db)
@@ -47,7 +49,7 @@ async def get_dashboard_activity(
 async def create_app(
     app_in: AppCreate,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Create a new software product (App). Not a company — a product."""
     return await AdminAppService.create_app(db, app_in)
@@ -56,7 +58,7 @@ async def create_app(
 @router.get("", response_model=List[AppRead])
 async def list_apps(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """List all active software products."""
     return await AdminAppService.list_apps(db)
@@ -67,7 +69,7 @@ async def update_app(
     app_id: uuid.UUID,
     app_update: AppUpdate,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Update application details, including notification sender identities."""
     return await AdminAppService.update_app(db, app_id, app_update)
@@ -77,7 +79,7 @@ async def update_app(
 async def delete_app(
     app_id: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Soft-delete an application."""
     await AdminAppService.delete_app(db, app_id)
@@ -87,7 +89,7 @@ async def delete_app(
 @router.get("/history", response_model=List[AppRead])
 async def get_app_history(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """List all soft-deleted software products."""
     return await AdminAppService.get_app_history(db)
@@ -98,17 +100,19 @@ async def get_app_history(
 # ─────────────────────────────────────────────────────────────
 
 @router.post("/keys", response_model=List[dict])
+@limiter.limit("10/minute")
 async def generate_activation_keys(
+    request: Request, # Required by slowapi
     key_in: ActivationKeyCreate,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """
     Generate one or more activation keys for a specific App.
     Each key = one company license. Raw keys shown ONCE — save them.
     Asynchronously triggers email and WhatsApp notifications.
     """
-    generated_keys = await AdminAppService.generate_keys(db, key_in)
+    generated_keys = await AdminAppService.generate_keys(db, key_in, admin_id=current_admin.id)
     
     app_data = await AdminRepo.get_app_by_uuid(db, key_in.app_id)
     app_name = app_data.app_name if app_data else "Weighbridge Software"
@@ -157,7 +161,7 @@ async def generate_activation_keys(
 async def list_keys_for_app(
     app_uuid: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """List all company licenses (activation keys) for a specific product."""
     return await AdminRepo.get_keys_for_app(db, app_uuid)
@@ -166,7 +170,7 @@ async def list_keys_for_app(
 @router.get("/keys/all", response_model=List[ActivationKeyRead])
 async def list_all_keys(
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin),
+    current_admin: AdminUser = Depends(get_current_admin),
     limit: int = 200,
     offset: int = 0
 ):
@@ -178,7 +182,7 @@ async def list_all_keys(
 async def rotate_key_token(
     key_uuid: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """
     Rotates the machine token for a license.
@@ -192,17 +196,30 @@ async def update_key_details(
     key_uuid: uuid.UUID,
     update_in: ActivationKeyUpdate,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Updates license metadata, branding, or custom labels."""
-    return await AdminAppService.update_key(db, key_uuid, update_in)
+    return await AdminAppService.update_key(db, key_uuid, update_in, admin_id=current_admin.id)
+
+
+@router.post("/{app_id}/test-smtp")
+async def test_app_smtp(
+    app_id: uuid.UUID,
+    db: AsyncSession = Depends(get_remote_db),
+    current_admin: AdminUser = Depends(get_current_admin)
+):
+    """
+    Attempts to send a test email using the App's configured SMTP.
+    Updates smtp_status to VALID or INVALID based on result.
+    """
+    return await AdminAppService.test_smtp(db, app_id)
 
 
 @router.delete("/keys/{key_uuid}/revoke")
 async def revoke_key(
     key_uuid: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
+    current_admin: AdminUser = Depends(get_current_admin)
 ):
     """Permanently revokes a license key."""
-    return await AdminAppService.revoke_key(db, key_uuid)
+    return await AdminAppService.revoke_key(db, key_uuid, admin_id=current_admin.id)

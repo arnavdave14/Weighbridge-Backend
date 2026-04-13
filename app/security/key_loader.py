@@ -27,6 +27,7 @@ _KEYRING_SERVICE = "weighbridge-edge"
 # ─── Sentinel for unset keys ─────────────────────────────────────────────────
 _DEFAULT_DB_KEY    = "default_dev_key_change_me"
 _DEFAULT_LOCAL_KEY = "default_local_secret_change_me"
+_DEFAULT_SMTP_ENC_KEY = "default_smtp_encryption_key_change_me_to_32_chars" # Will be padded/validated in security.py
 
 
 def _try_import_keyring():
@@ -132,6 +133,20 @@ def load_local_api_secret() -> str:
         key = _DEFAULT_LOCAL_KEY
 
     _assert_not_default_in_production("LOCAL_API_SECRET", key, _DEFAULT_LOCAL_KEY)
+    return key
+
+
+def load_encryption_key() -> str:
+    """
+    Returns the symmetric encryption key for SMTP passwords.
+    Resolution order: keyring → ENCRYPTION_KEY env var → default (dev only).
+    """
+    key = get_secret("ENCRYPTION_KEY", env_fallback="ENCRYPTION_KEY")
+
+    if not key:
+        key = _DEFAULT_SMTP_ENC_KEY
+
+    _assert_not_default_in_production("ENCRYPTION_KEY", key, _DEFAULT_SMTP_ENC_KEY)
     return key
 
 

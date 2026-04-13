@@ -4,6 +4,7 @@ from app.database.db_manager import get_db
 from app.services.integrity_service import IntegrityService
 from app.services.audit_service import AuditService
 from app.api.admin_deps import get_current_admin
+from app.models.admin_models import AdminUser
 import logging
 
 router = APIRouter(prefix="/integrity", tags=["Security — Integrity"])
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/status")
 async def get_integrity_status(
-    admin: dict = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -26,7 +27,7 @@ async def get_integrity_status(
 async def enable_integrity_override(
     reason: str = Body(..., embed=True),
     duration_minutes: int = Body(60, embed=True),
-    admin: dict = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -40,12 +41,12 @@ async def enable_integrity_override(
         action_type="ENABLE_INTEGRITY_OVERRIDE",
         resource_type="SECURITY",
         actor_type="USER",
-        actor_id=admin.get("sub"),
+        actor_id=str(admin.id),
         severity="CRITICAL",
         metadata={
             "reason": reason,
             "duration_minutes": duration_minutes,
-            "requested_by": admin.get("sub")
+            "requested_by": admin.email
         }
     )
     await db.commit()

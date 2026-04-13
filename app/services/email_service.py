@@ -1,19 +1,23 @@
-import smtplib
 import logging
 import asyncio
-from typing import Dict, Any
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from typing import Dict, Any, Optional
 from app.config.settings import settings
+from app.services.email_provider import SMTPProvider
 
 logger = logging.getLogger(__name__)
 
+# Single instance for system-wide emails (fallback)
+def get_system_provider() -> SMTPProvider:
+    return SMTPProvider(
+        host=settings.SMTP_HOST,
+        port=settings.SMTP_PORT,
+        user=settings.SMTP_USER,
+        password=settings.SMTP_PASS
+    )
+
 async def send_otp_email(email: str, otp: str) -> Dict[str, Any]:
-    """
-    Sends a 6-digit OTP to the admin email for login verification.
-    """
-    if not email or not settings.SMTP_USER or not settings.SMTP_PASS:
-        logger.warning(f"OTP Email skipped for {email}: SMTP Config or Target missing.")
+    """Sends a 6-digit OTP to the admin email for login verification."""
+    if not email or not settings.SMTP_USER:
         return {"status": "skipped"}
 
     subject = f"{otp} is your Admin Panel verification code"
@@ -26,19 +30,14 @@ async def send_otp_email(email: str, otp: str) -> Dict[str, Any]:
         f"{settings.EMAILS_FROM_NAME}"
     )
 
-    msg = MIMEMultipart()
-    msg['From'] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
-    msg['To'] = email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-
-    try:
-        await asyncio.to_thread(_send_sync, msg)
-        logger.info(f"✅ OTP Email sent successfully to {email}")
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"OTP Email failed for {email}: {str(e)}")
-        return {"status": "failed", "reason": str(e)}
+    provider = get_system_provider()
+    return await provider.send_email(
+        to_email=email,
+        subject=subject,
+        body=body,
+        from_email=settings.EMAILS_FROM_EMAIL,
+        from_name=settings.EMAILS_FROM_NAME
+    )
 
 async def send_email_receipt(
     receipt_id: int, 
@@ -47,11 +46,8 @@ async def send_email_receipt(
     weight: float, 
     token: str
 ) -> Dict[str, Any]:
-    """
-    Sends email containing the receipt link.
-    """
-    if not email or not settings.SMTP_USER or not settings.SMTP_PASS:
-        logger.warning(f"[RT-{receipt_id}] Email skipped: Config or Target missing.")
+    """Sends email containing the receipt link."""
+    if not email or not settings.SMTP_USER:
         return {"status": "skipped"}
 
     subject = f"Receipt for Vehicle {vehicle}"
@@ -65,58 +61,50 @@ async def send_email_receipt(
         f"Weighbridge Team"
     )
 
-    msg = MIMEMultipart()
-    msg['From'] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
-    msg['To'] = email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
-
-    try:
-        # Running sync smtplib in a thread
-        await asyncio.to_thread(_send_sync, msg)
+    provider = get_system_provider()
+    res = await provider.send_email(
+        to_email=email,
+        subject=subject,
+        body=body,
+        from_email=settings.EMAILS_FROM_EMAIL,
+        from_name=settings.EMAILS_FROM_NAME
+    )
+    if res["status"] == "success":
         logger.info(f"[RT-{receipt_id}] ✅ Email sent successfully to {email}")
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"[RT-{receipt_id}] Email failed: {str(e)}")
-        return {"status": "failed", "reason": str(e)}
+    else:
+        logger.error(f"[RT-{receipt_id}] Email failed: {res.get('reason')}")
+    return res
 
-def _send_sync(msg):
-    # Added 15 second timeout for production safety
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-        server.starttls()
-        server.login(settings.SMTP_USER, settings.SMTP_PASS)
-        server.send_message(msg)
-
-async def send_license_email(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None) -> Dict[str, Any]:
-    """
-    Sends a license email with raw subject and body provided by the frontend.
-    """
+async def send_license_email(
+    email: str, 
+    key_data: Dict[str, Any], 
+    app_name: str, 
+    sender_name: str = None,
+    providerOverride: Optional[Any] = None # For multi-tenant injection
+) -> Dict[str, Any]:
+    """Sends a license email with raw subject and body provided by the frontend."""
     if not email or not key_data:
-        logger.warning(f"License Email skipped: Config or Target missing.")
-        return {}
+        return {"status": "skipped"}
 
     subject = key_data.get('subject')
     body = key_data.get('body')
 
     if not subject or not body:
         logger.error(f"License Email to {email} skipped: Missing subject or body.")
-        return {}
+        return {"status": "failed", "reason": "missing_content"}
 
+    # Determine provider: Override (Company) or System
+    provider = providerOverride or get_system_provider()
     from_name = sender_name or settings.EMAILS_FROM_NAME
-    msg = MIMEMultipart()
-    msg['From'] = f"{from_name} <{settings.EMAILS_FROM_EMAIL}>"
-    msg['To'] = email
-    msg['Subject'] = subject
-    msg['Reply-To'] = settings.EMAILS_FROM_EMAIL
-    msg['X-Mailer'] = "Weighbridge-Production-Mailer"
+    from_email = settings.EMAILS_FROM_EMAIL
     
-    msg.attach(MIMEText(body, 'plain'))
-
-    try:
-        # Running sync smtplib in a thread
-        await asyncio.to_thread(_send_sync, msg)
-        logger.info(f"✅ License Email sent successfully to {email}")
-        return {}
-    except Exception as e:
-        logger.error(f"License Email failed for {email}: {str(e)}")
-        return {"status": "failed", "reason": str(e)}
+    # If using an override provider, we might want to check its specific from_email/name,
+    # but the provider.send_email handles that if we pass None.
+    
+    return await provider.send_email(
+        to_email=email,
+        subject=subject,
+        body=body,
+        from_email=from_email,
+        from_name=from_name
+    )

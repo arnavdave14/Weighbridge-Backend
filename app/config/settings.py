@@ -9,7 +9,7 @@ env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Secure key loader — keyring primary, env fallback
-from app.security.key_loader import load_db_master_key, load_local_api_secret  # noqa: E402
+from app.security.key_loader import load_db_master_key, load_local_api_secret, load_encryption_key  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class Settings:
     # These are evaluated once at import time so they remain constant for the process lifetime.
     DB_MASTER_KEY: str = load_db_master_key()
     LOCAL_API_SECRET: str = load_local_api_secret()
+    ENCRYPTION_KEY: str = load_encryption_key()
     
     # Legacy fallbacks
     DATABASE_URL: str = os.getenv("DATABASE_URL")
@@ -84,8 +85,12 @@ class Settings:
         # Production secret guard is already enforced inside key_loader._assert_not_default_in_production.
         # This block adds a redundant double-check at startup for defence-in-depth.
         if self.ENVIRONMENT == "production":
-            placeholders = {"default_dev_key_change_me", "default_local_secret_change_me"}
-            if self.DB_MASTER_KEY in placeholders or self.LOCAL_API_SECRET in placeholders:
+            placeholders = {
+                "default_dev_key_change_me", 
+                "default_local_secret_change_me",
+                "default_smtp_encryption_key_change_me_to_32_chars"
+            }
+            if self.DB_MASTER_KEY in placeholders or self.LOCAL_API_SECRET in placeholders or self.ENCRYPTION_KEY in placeholders:
                 msg = "CRITICAL: Secrets still at placeholder defaults — aborting production boot."
                 print(msg)
                 raise RuntimeError(msg)

@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.models.admin_models import App, ActivationKey, Notification, AdminUser, AdminOTP, ActivationKeySchema, MachineNonce, FailedNotification
+from app.models.admin_models import (
+    App, ActivationKey, Notification, AdminUser, AdminOTP, 
+    ActivationKeySchema, MachineNonce, FailedNotification, 
+    ActivationKeyHistory
+)
 
 
 class AdminRepo:
@@ -19,14 +23,8 @@ class AdminRepo:
     # ─────────────────────────────────────────
 
     @staticmethod
-    async def create_app(db: AsyncSession, app_id: str, app_name: str, description: Optional[str], whatsapp_sender_channel: Optional[str] = None, email_sender: Optional[str] = None) -> App:
-        db_app = App(
-            app_id=app_id, 
-            app_name=app_name, 
-            description=description,
-            whatsapp_sender_channel=whatsapp_sender_channel,
-            email_sender=email_sender
-        )
+    async def create_app(db: AsyncSession, **kwargs) -> App:
+        db_app = App(**kwargs)
         db.add(db_app)
         await db.commit()
         await db.refresh(db_app)
@@ -37,7 +35,7 @@ class AdminRepo:
         stmt = (
             select(App, func.count(ActivationKey.id).label("keys_count"))
             .outerjoin(App.keys)
-            .where(App.deleted_at == None)
+            .where(App.is_deleted == False)
             .group_by(App.id)
             .order_by(App.created_at.desc())
         )
@@ -50,7 +48,7 @@ class AdminRepo:
 
     @staticmethod
     async def get_deleted_apps(db: AsyncSession) -> List[App]:
-        result = await db.execute(select(App).where(App.deleted_at != None).order_by(App.deleted_at.desc()))
+        result = await db.execute(select(App).where(App.is_deleted == True).order_by(App.deleted_at.desc()))
         return result.scalars().all()
 
     @staticmethod
@@ -61,7 +59,7 @@ class AdminRepo:
     @staticmethod
     async def get_app_by_app_id_string(db: AsyncSession, app_id_str: str) -> Optional[App]:
         """Lookup by the human-readable app_id string (e.g. WB-APP-XXXX)."""
-        result = await db.execute(select(App).where(App.app_id == app_id_str, App.deleted_at == None))
+        result = await db.execute(select(App).where(App.app_id == app_id_str, App.is_deleted == False))
         return result.scalars().first()
 
     @staticmethod
@@ -73,14 +71,16 @@ class AdminRepo:
         now = datetime.now(timezone.utc)
         
         # 1. Soft-delete the app
+        app.is_deleted = True
         app.deleted_at = now
         db.add(app)
         
-        # 2. Automatically revoke ALL associated license keys
+        # 2. Automatically EXPIRE ALL associated license keys
+        # Requirement: "If app is deleted -> all associated licenses must immediately become EXPIRED"
         await db.execute(
             update(ActivationKey)
             .where(ActivationKey.app_id == app.id)
-            .values(status="revoked", revoked_at=now)
+            .values(status="EXPIRED", expired_at=now)
         )
         
         await db.commit()
@@ -107,6 +107,7 @@ class AdminRepo:
         token: str,
         expiry_date: datetime,
         company_name: str,
+        issued_at: Optional[datetime] = None,
         **kwargs
     ) -> ActivationKey:
         db_key = ActivationKey(
@@ -115,12 +116,38 @@ class AdminRepo:
             token=token,
             expiry_date=expiry_date,
             company_name=company_name,
+            issued_at=issued_at or datetime.now(timezone.utc),
             **kwargs
         )
         db.add(db_key)
         await db.commit()
         await db.refresh(db_key)
         return db_key
+
+    @staticmethod
+    async def create_history_entry(
+        db: AsyncSession,
+        key_id: uuid.UUID,
+        new_status: str,
+        reason: str,
+        prev_status: Optional[str] = None,
+        prev_expiry: Optional[datetime] = None,
+        new_expiry: Optional[datetime] = None,
+        changed_by: Optional[uuid.UUID] = None
+    ) -> ActivationKeyHistory:
+        history = ActivationKeyHistory(
+            activation_key_id=key_id,
+            prev_status=prev_status,
+            new_status=new_status,
+            prev_expiry=prev_expiry,
+            new_expiry=new_expiry,
+            reason=reason,
+            changed_by=changed_by
+        )
+        db.add(history)
+        await db.commit()
+        await db.refresh(history)
+        return history
 
     @staticmethod
     async def get_keys_for_app(db: AsyncSession, app_id: uuid.UUID) -> List[ActivationKey]:
@@ -203,15 +230,32 @@ class AdminRepo:
         return result.scalars().first()
 
     @staticmethod
+    async def get_expiring_keys(db: AsyncSession) -> List[ActivationKey]:
+        """Fetch all ACTIVE or EXPIRING_SOON keys for background scanning."""
+        result = await db.execute(
+            select(ActivationKey)
+            .where(ActivationKey.status.in_(["ACTIVE", "EXPIRING_SOON"]))
+            .order_by(ActivationKey.expiry_date.asc())
+        )
+        return result.scalars().all()
+
+    @staticmethod
     async def count_keys_by_status(db: AsyncSession) -> dict:
         result = await db.execute(
             select(ActivationKey.status, func.count(ActivationKey.id))
+            .join(App, ActivationKey.app_id == App.id)
+            .where(App.is_deleted == False)
             .group_by(ActivationKey.status)
         )
         rows = result.all()
-        counts = {"active": 0, "expired": 0, "revoked": 0}
+        counts = {"ACTIVE": 0, "EXPIRING_SOON": 0, "EXPIRED": 0, "REVOKED": 0}
         for status, count in rows:
-            counts[status] = count
+            # Normalize to uppercase to handle mixed-case legacy data
+            normalized_status = status.upper() if status else "UNKNOWN"
+            if normalized_status in counts:
+                counts[normalized_status] += count
+            else:
+                counts[normalized_status] = count
         return counts
 
     # ─────────────────────────────────────────

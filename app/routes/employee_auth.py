@@ -35,7 +35,7 @@ from app.api.employee_deps import create_employee_token, get_current_employee
 from app.api.admin_deps import get_current_admin
 from app.api.machine_deps import verify_apex_identity
 from app.models.employee_model import Employee
-from app.models.admin_models import ActivationKey
+from app.models.admin_models import ActivationKey, AdminUser
 from app.repositories.employee_repo import EmployeeRepository
 from app.repositories.admin_repo import AdminRepo
 
@@ -252,7 +252,7 @@ async def employee_register_on_device(
 async def admin_create_employee(
     req: AdminEmployeeCreate,
     db: AsyncSession = Depends(get_remote_db),
-    admin: dict = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """
     Admin creates an employee for a specific tenant (key_id).
@@ -298,7 +298,7 @@ async def admin_create_employee(
 
     logger.info(
         "[AdminAudit] Employee created: admin=%s employee=%s key_id=%s company=%s",
-        admin.get("sub"), employee.id, req.key_id, key.company_name,
+        admin.email, employee.id, req.key_id, key.company_name,
     )
     return EmployeeRead.model_validate(employee)
 
@@ -313,7 +313,7 @@ async def admin_list_employees(
     key_id: str,
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_remote_db),
-    admin: dict = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """
     Returns all employees for a given tenant (key_id).
@@ -329,7 +329,7 @@ async def admin_list_employees(
     )
     logger.info(
         "[AdminAudit] Employee list accessed: admin=%s key_id=%s count=%d",
-        admin.get("sub"), key_id, len(employees),
+        admin.email, key_id, len(employees),
     )
     return [EmployeeRead.model_validate(e) for e in employees]
 
@@ -343,7 +343,7 @@ async def admin_list_employees(
 async def admin_deactivate_employee(
     employee_id: str,
     db: AsyncSession = Depends(get_remote_db),
-    admin: dict = Depends(get_current_admin),
+    admin: AdminUser = Depends(get_current_admin),
 ):
     """
     Soft-deletes an employee (sets is_active = False).
@@ -361,6 +361,6 @@ async def admin_deactivate_employee(
 
     logger.info(
         "[AdminAudit] Employee deactivated: admin=%s employee=%s",
-        admin.get("sub"), employee_id,
+        admin.email, employee_id,
     )
     return EmployeeRead.model_validate(employee)

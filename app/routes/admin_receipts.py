@@ -98,7 +98,7 @@ async def list_all_receipts(
     # GAP-6: Audit log every admin data access
     logger.info(
         "[AdminAudit] GET /admin/receipts | admin=%s | filters=%s",
-        admin.get("sub"), {k: v for k, v in filters.items() if v is not None}
+        admin.email, {k: v for k, v in filters.items() if v is not None}
     )
     return await AdminReceiptService.list_receipts(db, **filters)
 
@@ -115,7 +115,7 @@ async def get_receipt_detail(
 ):
     """Fetch a single receipt by its database ID with full tenant enrichment."""
     # GAP-6: Audit log
-    logger.info("[AdminAudit] GET /admin/receipts/%d | admin=%s", receipt_id, admin.get("sub"))
+    logger.info("[AdminAudit] GET /admin/receipts/%d | admin=%s", receipt_id, admin.email)
     return await AdminReceiptService.get_receipt(db, receipt_id)
 
 
@@ -147,7 +147,7 @@ async def list_receipts_for_app(
     # GAP-6: Audit log
     logger.info(
         "[AdminAudit] GET /admin/apps/%s/receipts | admin=%s | machine_id=%s",
-        app_id, admin.get("sub"), machine_id
+        app_id, admin.email, machine_id
     )
     return await AdminReceiptService.list_receipts(db, app_id=app_id, **filters)
 
@@ -166,7 +166,7 @@ async def list_machines_for_app(
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
 
-    logger.info("[AdminAudit] GET /admin/apps/%s/machines | admin=%s", app_id, admin.get("sub"))
+    logger.info("[AdminAudit] GET /admin/apps/%s/machines | admin=%s", app_id, admin.email)
     return await AdminReceiptService.list_machines_for_app(db, app_id)
 
 
@@ -198,7 +198,7 @@ async def list_receipts_for_key(
     # GAP-6: Audit log — includes company_name for observability
     logger.info(
         "[AdminAudit] GET /admin/keys/%s/receipts | admin=%s | company=%s | machine_id=%s",
-        key_id, admin.get("sub"), key.company_name, machine_id
+        key_id, admin.email, key.company_name, machine_id
     )
     return await AdminReceiptService.list_receipts(db, key_token=key.token, **filters)
 
@@ -219,7 +219,7 @@ async def list_machines_for_key(
 
     logger.info(
         "[AdminAudit] GET /admin/keys/%s/machines | admin=%s | company=%s",
-        key_id, admin.get("sub"), key.company_name
+        key_id, admin.email, key.company_name
     )
     return await AdminReceiptService.list_machines_for_key(db, key.token)
 
@@ -249,7 +249,7 @@ async def list_receipts_for_machine(
     # GAP-6: Audit log
     logger.info(
         "[AdminAudit] GET /admin/machines/%s/receipts | admin=%s",
-        machine_id, admin.get("sub")
+        machine_id, admin.email
     )
     return await AdminReceiptService.list_receipts(
         db,

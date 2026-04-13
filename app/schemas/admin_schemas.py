@@ -12,6 +12,15 @@ class AppCreate(BaseModel):
     description: Optional[str] = None
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
+    
+    # Per-Company SMTP
+    smtp_enabled: bool = False
+    smtp_host: Optional[str] = "smtp.gmail.com"
+    smtp_port: Optional[int] = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
 
 
 class AppUpdate(BaseModel):
@@ -19,6 +28,16 @@ class AppUpdate(BaseModel):
     description: Optional[str] = None
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
+
+    # Per-Company SMTP update
+    smtp_enabled: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    smtp_status: Optional[str] = None
 
 
 class AppRead(BaseModel):
@@ -28,6 +47,16 @@ class AppRead(BaseModel):
     description: Optional[str] = None
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
+    
+    # SMTP Public Fields (Excludes Password)
+    smtp_enabled: bool
+    smtp_host: Optional[str]
+    smtp_port: Optional[int]
+    smtp_user: Optional[str]
+    from_email: Optional[str]
+    from_name: Optional[str]
+    smtp_status: str
+    
     created_at: datetime
     keys_count: int = 0
 

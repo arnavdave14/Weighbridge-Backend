@@ -13,6 +13,8 @@ from app.models.models import (
 # registers the 'employees' table in Base.metadata for both SQLite and PostgreSQL.
 from app.models.employee_model import Employee  # noqa: F401
 from app.sync.sync_worker import run_sync_worker_loop
+from app.services.admin_auth_service import AdminAuthService
+from app.database.postgres import remote_engine, remote_session
 from app.config.settings import settings
 import uvicorn
 import asyncio
@@ -22,7 +24,8 @@ logger = logging.getLogger(__name__)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from app.core.limiter import limiter
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
@@ -85,16 +88,21 @@ async def lifespan(app: "FastAPI"):
                 await conn.run_sync(Base.metadata.create_all)
                 await conn.run_sync(AdminBase.metadata.create_all)
             logger.info("Successfully initialized Remote Database tables.")
+            
+            # --- [SEEDING] ---
+            # Create default admin if missing (or fix invalid hashes)
+            async with remote_session() as remote_db:
+                await AdminAuthService.seed_first_admin(remote_db)
+                
         except Exception as e:
-            logger.error(f"Could not connect to Remote Database: {e}")
+            logger.error(f"Could not connect or seed Remote Database: {e}")
 
     yield
 
     # --- SHUTDOWN ---
     pass
 
-# Rate Limiter setup
-limiter = Limiter(key_func=get_remote_address)
+# Rate Limiter setup (using the centralized instance)
 app = FastAPI(
     title="Weighbridge Backend",
     description="Production-grade backend for industrial Weighbridge system.",
@@ -196,6 +204,37 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.get("/health/celery")
+async def health_check_celery():
+    """
+    Checks if the background Celery worker is alive by looking at the last heartbeat.
+    """
+    from datetime import datetime, timezone
+    import redis
+    try:
+        r = redis.from_url(settings.REDIS_URL)
+        last_beat = r.get("celery_last_heartbeat")
+        if not last_beat:
+            return JSONResponse(status_code=503, content={"status": "error", "message": "No heartbeat detected from Celery."})
+        
+        last_beat_time = datetime.fromisoformat(last_beat.decode())
+        diff = (datetime.now(timezone.utc) - last_beat_time).total_seconds()
+        
+        status = "healthy"
+        if diff > 300: # 5 minutes
+            status = "down"
+        elif diff > 120: # 2 minutes
+            status = "degraded"
+            
+        return {
+            "status": status, 
+            "last_heartbeat_seconds_ago": int(diff),
+            "threshold_degraded_seconds": 120,
+            "threshold_down_seconds": 300
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "down", "message": str(e)})
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

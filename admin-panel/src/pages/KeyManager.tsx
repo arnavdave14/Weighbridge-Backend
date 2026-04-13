@@ -65,10 +65,11 @@ const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, copi
       <td>
         <div className="flex items-center gap-2">
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-            item.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 
-            item.status === 'expired' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'
+            item.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' : 
+            item.status === 'EXPIRING_SOON' ? 'bg-amber-100 text-amber-700' :
+            item.status === 'EXPIRED' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'
           }`}>
-            {item.status}
+            {item.status.replace('_', ' ')}
           </span>
           {item.current_version !== undefined && (
              <span className="px-1.5 py-0.5 bg-surface-100 text-surface-600 text-[9px] font-mono rounded border border-surface-200">
@@ -89,7 +90,7 @@ const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, copi
             className="text-[11px] font-medium text-brand-600 hover:text-brand-700 hover:underline flex items-center gap-1">
             <Clock className="w-3 h-3" /> Extend
           </button>
-          {item.status !== 'revoked' && (
+          {item.status !== 'REVOKED' && (
             <button onClick={() => {
               if (window.confirm("Rotate machine token? Old token will stop working in 1 hour.")) {
                 onRotate(item.id)
@@ -99,7 +100,7 @@ const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, copi
               <RefreshCw className="w-3 h-3" /> Rotate
             </button>
           )}
-          {item.status !== 'revoked' && (
+          {item.status !== 'REVOKED' && item.status !== 'EXPIRED' && (
             <button onClick={() => onRevoke(item.id)}
               className="text-[11px] font-medium text-red-500 hover:text-red-600 hover:underline flex items-center gap-1">
               <Trash2 className="w-3 h-3" /> Revoke
@@ -216,13 +217,27 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
 }) => {
   const toast = useToast()
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({
+  const [lastSubmitted, setLastSubmitted] = useState<string | null>(null)
+  
+  const initialForm = {
     app_id: '', company_name: '', expiry_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'), count: 1, email: '',
     phone: '', mobile_number: '', whatsapp_number: '', address: '', labels: [] as CustomLabel[],
     bill_header_1: '', bill_header_2: '', bill_header_3: '', bill_footer: '',
     logo_url: '', signup_image_url: '',
     notification_type: 'both' as 'whatsapp' | 'email' | 'both',
-  })
+  }
+  const [form, setForm] = useState(initialForm)
+
+  const isDuplicate = useMemo(() => {
+    if (!lastSubmitted) return false;
+    const current = JSON.stringify({
+      app_id: form.app_id,
+      company: form.company_name,
+      email: form.email,
+      whatsapp: form.whatsapp_number
+    });
+    return current === lastSubmitted;
+  }, [form.app_id, form.company_name, form.email, form.whatsapp_number, lastSubmitted]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -231,6 +246,15 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     try {
       const payload = { ...form, expiry_date: new Date(form.expiry_date).toISOString() }
       const { data } = await api.post('/apps/keys', payload)
+      
+      // Store successful submission data for duplicate prevention
+      setLastSubmitted(JSON.stringify({
+        app_id: form.app_id,
+        company: form.company_name,
+        email: form.email,
+        whatsapp: form.whatsapp_number
+      }))
+
       onSuccess(data.map((d: any) => d.raw_activation_key))
       toast.success(`Successfully generated ${form.count} activation key(s)!`)
       onClose()
@@ -415,9 +439,9 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
               </div>
               <div className="pt-4 flex gap-3 sticky bottom-0 backdrop-blur-sm pb-2">
                 <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-                <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
+                <button type="submit" disabled={saving || isDuplicate} className={`btn-primary flex-1 justify-center ${isDuplicate ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}>
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
-                  {saving ? 'Generating…' : 'Generate Keys'}
+                  {saving ? 'Generating…' : isDuplicate ? 'Already Generated' : 'Generate Keys'}
                 </button>
               </div>
             </form>

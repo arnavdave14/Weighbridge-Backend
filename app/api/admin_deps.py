@@ -39,6 +39,6 @@ async def get_current_admin(
         if not admin or admin.session_id != token_session_id:
             raise session_exception
             
-        return payload
+        return admin
     except JWTError:
         raise credentials_exception

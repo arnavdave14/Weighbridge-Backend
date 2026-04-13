@@ -370,7 +370,7 @@ export default function Employees() {
   // Load license keys (for tenant selector)
   useEffect(() => {
     api.get('/apps/keys/all')
-      .then(r => setKeys(r.data.filter((k: Key) => k.status === 'active')))
+      .then(r => setKeys(r.data.filter((k: Key) => k.status.toUpperCase() !== 'REVOKED')))
       .catch(() => toast.error('Could not load license keys'))
   }, [])
 

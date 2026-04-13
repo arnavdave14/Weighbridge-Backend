@@ -79,11 +79,44 @@ class AdminAuthService:
 
     @staticmethod
     async def seed_first_admin(db: AsyncSession) -> None:
-        """Creates default admin if no admin users exist. Idempotent."""
-        existing = await AdminRepo.get_admin_by_email(db, "admin@weighbridge.com")
-        if not existing:
+        """
+        Creates default admin if no admin users exist. Idempotent. 
+        Self-heals if the existing admin has an unidentifiable hash (e.g. from a removed scheme).
+        """
+        from app.core.security import pwd_context, get_password_hash
+        from sqlalchemy import delete
+        from app.models.admin_models import AdminUser
+
+        try:
+            # 1. Check for existing admin
+            existing = await AdminRepo.get_admin_by_email(db, "admin@weighbridge.com")
+            
+            if existing:
+                try:
+                    # 2. Check if the current hash is identifiable/supported
+                    if pwd_context.identify(existing.hashed_password):
+                        print("ℹ️  Admin already exists with valid hash, skipping seed.")
+                        return
+                    
+                    # If identify returns None, it's an unsupported format (like old bcrypt)
+                    print("⚠️  Unsupported password hash format detected, upgrading account...")
+                except Exception:
+                    # Any identification error (like UnknownHashError) means we must upgrade
+                    print("⚠️  Could not identify admin hash scheme, upgrading account...")
+                
+                # 3. Upgrade the existing account instead of deleting (to avoid FK violations)
+                existing.hashed_password = get_password_hash("Admin123!")
+                db.add(existing)
+                await db.commit()
+                print("✅ Default admin password upgraded to PBKDF2: admin@weighbridge.com")
+                return
+            
+            # 4. Create fresh admin if none exists
             hashed = get_password_hash("Admin123!")
             await AdminRepo.create_admin(db, "admin@weighbridge.com", hashed)
             print("✅ Default admin user seeded: admin@weighbridge.com")
-        else:
-            print("ℹ️  Admin already exists, skipping seed.")
+            
+        except Exception as e:
+            await db.rollback()
+            print(f"❌ Seed failed: {str(e)}")
+            # We don't raise here to allow the server to boot even if seeding fails once

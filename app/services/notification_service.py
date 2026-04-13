@@ -2,8 +2,9 @@ import logging
 import re
 import asyncio
 import time
+import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional, Union
 
 from app.services import email_service, whatsapp_service
 from app.core.metrics import metrics
@@ -13,12 +14,14 @@ from app.config.settings import settings
 from app.config.settings import settings
 from app.database.postgres import remote_session
 from app.repositories.admin_repo import AdminRepo
+from app.core.security import decrypt_password
+from app.services.email_provider import SMTPProvider
 
 logger = logging.getLogger("notification_service")
 
 class NotificationService:
     @staticmethod
-    def validate_contact_info(email: str | None, phone: str | None) -> Tuple[bool, bool]:
+    def validate_contact_info(email: Optional[str], phone: Optional[str]) -> Tuple[bool, bool]:
         """
         Level 1 Pre-validation:
         Ensures email matches regex pattern and phone looks like a valid number.
@@ -46,34 +49,37 @@ class NotificationService:
         key_data: Dict[str, Any],
         app_name: str
     ):
-        """
-        Asynchronous orchestrator for dispatching notifications.
-        Gracefully handles failures per channel and logs structurally.
-        """
-        email = key_data.get("email")
-        phone = key_data.get("whatsapp_number")
-        
-        is_valid_email, is_valid_phone = NotificationService.validate_contact_info(email, phone)
-        
-        tasks = []
-        if is_valid_email:
-            tasks.append(NotificationService._send_email_safe(email, key_data, app_name))
-            
-        if is_valid_phone:
-            tasks.append(NotificationService._send_whatsapp_safe(phone, key_data, app_name))
+        """Standard generation notification."""
+        return await NotificationService._notify_license_generation_async_orchestrated(key_data, app_name)
 
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            failed_channels = {}
-            for res in results:
-                if isinstance(res, Exception):
-                    # We can pack the exception into the failed_channels dict
-                    # But we'd need to know which channel the exception came from.
-                    pass
-            
-            # Since tracking exceptions perfectly via gather is tricky, 
-            # I will refactor the safe handlers to raise if they fail, or return their channel.
+    @staticmethod
+    async def notify_license_expiry_async(
+        key_data: Dict[str, Any],
+        app_name: str,
+        days_remaining: int
+    ):
+        """Specialized notification for impending license expiry."""
+        company = key_data.get("company_name", "Customer")
+        
+        # Templates for expiry alerts
+        subject = f"ACTION REQUIRED: Your {app_name} license expires in {days_remaining} days"
+        body = (
+            f"Dear {company},\n\n"
+            f"This is a reminder that your license for {app_name} will expire in {days_remaining} days "
+            f"on {key_data.get('expiry_date')}.\n\n"
+            f"To avoid any interruption in your operations, please contact your administrator to renew your license.\n\n"
+            f"Regards,\n"
+            f"Support Team"
+        )
+        message = f"🚨 *License Expiry Alert*\nDear {company}, your license for {app_name} expires in {days_remaining} days. Please renew to avoid service disruption."
+
+        key_data_copy = key_data.copy()
+        key_data_copy["subject"] = subject
+        key_data_copy["body"] = body
+        key_data_copy["message"] = message
+
+        return await NotificationService._notify_license_generation_async_orchestrated(key_data_copy, app_name)
+
 
     @staticmethod
     def send_whatsapp_license_sync(key_data: Dict[str, Any], app_name: str) -> str:
@@ -278,19 +284,96 @@ class NotificationService:
                 metrics.NOTIFICATION_LATENCY_SECONDS.labels(channel=channel).observe(time.time() - start_time)
 
         return result_state
-            
+
+    @staticmethod
+    async def get_smtp_provider_for_app(app: Any) -> Optional[SMTPProvider]:
+        """
+        Logic:
+        IF app.smtp_enabled == true AND smtp_status == VALID:
+        → use company SMTP (decrypt password)
+        ELSE:
+        → return None (Fallback)
+        """
+        if not app.smtp_enabled or app.smtp_status != "VALID":
+            return None
+        
+        try:
+            decrypted_pass = decrypt_password(app.smtp_password)
+            return SMTPProvider(
+                host=app.smtp_host,
+                port=app.smtp_port,
+                user=app.smtp_user,
+                password=decrypted_pass
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize Company SMTP for App {app.app_name}: {e}")
+            return None
+
     @staticmethod
     async def _send_email_safe(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None):
         structured_log(logger, logging.INFO, "notification_initiated", channel="email", target=email)
         
-        result = await email_service.send_license_email(email, key_data, app_name, sender_name=sender_name)
+        # 1. Resolve App and Provider
+        app_id_str = key_data.get("app_id_str")
+        key_id = key_data.get("id")
         
-        if result.get("status") == "failed":
-            error_msg = result.get("reason", "Unknown API error")
-            structured_log(logger, logging.ERROR, "notification_failure", channel="email", target=email, error_message=error_msg)
-            raise Exception(f"Email failure: {error_msg}")
+        app = None
+        company_provider = None
+        
+        async with remote_session() as db:
+            if app_id_str:
+                app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
             
-        structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, result=result)
+            if app:
+                company_provider = await NotificationService.get_smtp_provider_for_app(app)
+
+            # 2. Attempt Company SMTP if available
+            if company_provider:
+                res = await email_service.send_license_email(
+                    email, key_data, app_name, 
+                    sender_name=app.from_name or sender_name,
+                    providerOverride=company_provider
+                )
+                
+                if res.get("status") == "success":
+                    await AdminRepo.create_history_entry(
+                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                        reason="EMAIL_SENT_COMPANY"
+                    )
+                    structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="company")
+                    return
+                else:
+                    error_msg = res.get("reason", "Unknown failure")
+                    await AdminRepo.create_history_entry(
+                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                        reason="EMAIL_FAILED_COMPANY",
+                        # We'll put the error in a dedicated message if we had one, 
+                        # but for now we'll append to reason or just log it.
+                    )
+                    structured_log(logger, logging.WARNING, "notification_failure_company", channel="email", target=email, error_message=error_msg)
+                    # Proceed to fallback
+                    await AdminRepo.create_history_entry(
+                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                        reason="EMAIL_FALLBACK_SYSTEM"
+                    )
+
+            # 3. System Fallback
+            res = await email_service.send_license_email(email, key_data, app_name, sender_name=sender_name)
+            
+            if res.get("status") == "success":
+                await AdminRepo.create_history_entry(
+                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    reason="EMAIL_SENT_SYSTEM"
+                )
+                structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="system")
+            else:
+                error_msg = res.get("reason", "Unknown API error")
+                await AdminRepo.create_history_entry(
+                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    reason="EMAIL_FAILED_SYSTEM"
+                )
+                structured_log(logger, logging.ERROR, "notification_failure_system", channel="email", target=email, error_message=error_msg)
+                raise Exception(f"Email failure: {error_msg}")
 
     @staticmethod
     async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: str = None):

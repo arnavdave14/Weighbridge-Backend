@@ -9,12 +9,14 @@ from typing import List, Optional
 from dateutil.relativedelta import relativedelta
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from app.repositories.admin_repo import AdminRepo
 from app.schemas.admin_schemas import AppCreate, AppUpdate, ActivationKeyCreate, ActivationKeyUpdate
-from app.core.security import get_password_hash, verify_password
-from app.models.admin_models import App, ActivationKey, ActivationKeySchema
+from app.core.security import get_password_hash, verify_password, encrypt_password
+from app.models.admin_models import App, ActivationKey, ActivationKeySchema, ActivationKeyHistory
 from app.core.validation_engine import get_etag
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +41,32 @@ class AdminAppService:
 
     @staticmethod
     async def create_app(db: AsyncSession, app_in: AppCreate) -> App:
-        return await AdminRepo.create_app(
-            db, 
-            app_id=app_in.app_id if hasattr(app_in, 'app_id') else f"WB-APP-{uuid.uuid4().hex[:6].upper()}", 
-            app_name=app_in.app_name, 
-            description=app_in.description,
-            whatsapp_sender_channel=app_in.whatsapp_sender_channel,
-            email_sender=app_in.email_sender
-        )
+        # 1. Uniqueness Check (Global - even deleted apps)
+        existing = await db.execute(select(App).where(App.app_name == app_in.app_name))
+        if existing.scalars().first():
+            raise HTTPException(status_code=400, detail=f"Application name '{app_in.app_name}' is already taken.")
+
+        try:
+            return await AdminRepo.create_app(
+                db, 
+                app_id=app_in.app_id if hasattr(app_in, 'app_id') else f"WB-APP-{uuid.uuid4().hex[:6].upper()}", 
+                app_name=app_in.app_name, 
+                description=app_in.description,
+                whatsapp_sender_channel=app_in.whatsapp_sender_channel,
+                email_sender=app_in.email_sender,
+                
+                # New SMTP fields
+                smtp_enabled=app_in.smtp_enabled,
+                smtp_host=app_in.smtp_host,
+                smtp_port=app_in.smtp_port,
+                smtp_user=app_in.smtp_user,
+                smtp_password=encrypt_password(app_in.smtp_password) if app_in.smtp_password else None,
+                from_email=app_in.from_email,
+                from_name=app_in.from_name
+            )
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=400, detail=f"Conflict: Application with name or ID already exists.")
 
     @staticmethod
     async def list_apps(db: AsyncSession):
@@ -70,14 +90,67 @@ class AdminAppService:
             raise HTTPException(status_code=404, detail="Application not found")
         
         update_data = app_update.model_dump(exclude_unset=True)
+        
+        # Handle password encryption
+        if "smtp_password" in update_data and update_data["smtp_password"]:
+            update_data["smtp_password"] = encrypt_password(update_data["smtp_password"])
+            
         return await AdminRepo.update_app(db, db_app, update_data)
+
+    @staticmethod
+    async def test_smtp(db: AsyncSession, app_id: uuid.UUID) -> dict:
+        from app.services.email_provider import SMTPProvider
+        from app.core.security import decrypt_password
+        
+        app = await AdminRepo.get_app_by_uuid(db, app_id)
+        if not app:
+            raise HTTPException(status_code=404, detail="App not found")
+        
+        if not app.smtp_user or not app.smtp_password:
+            raise HTTPException(status_code=400, detail="SMTP User and Password must be configured before testing.")
+        
+        try:
+            # 1. Initialize Provider
+            decrypted_pass = decrypt_password(app.smtp_password)
+            provider = SMTPProvider(
+                host=app.smtp_host,
+                port=app.smtp_port,
+                user=app.smtp_user,
+                password=decrypted_pass
+            )
+            
+            # 2. Attempt Test Send
+            test_subject = f"SMTP Verification: {app.app_name}"
+            test_body = f"Hello,\n\nThis is a test email to verify your SMTP configuration for {app.app_name}.\n\nIf you received this, your settings are VALID."
+            
+            res = await provider.send_email(
+                to_email=app.smtp_user, # Test send to self
+                subject=test_subject,
+                body=test_body,
+                from_email=app.from_email or app.smtp_user,
+                from_name=app.from_name or "SMTP Tester"
+            )
+            
+            # 3. Update Status
+            new_status = "VALID" if res["status"] == "success" else "INVALID"
+            await AdminRepo.update_app(db, app, {"smtp_status": new_status})
+            
+            if res["status"] == "success":
+                return {"status": "success", "message": "SMTP configuration verified successfully."}
+            else:
+                return {"status": "failed", "reason": res.get("reason", "Unknown failure")}
+                
+        except Exception as e:
+            logger.error(f"SMTP Test Error for App {app_id}: {e}")
+            await AdminRepo.update_app(db, app, {"smtp_status": "INVALID"})
+            return {"status": "failed", "reason": str(e)}
 
     # ─────────────────────────────────────────
     # ActivationKey (Company License) Operations
     # ─────────────────────────────────────────
 
     @staticmethod
-    async def generate_keys(db: AsyncSession, key_in: ActivationKeyCreate) -> List[dict]:
+    async def generate_keys(db: AsyncSession, key_in: ActivationKeyCreate, admin_id: Optional[uuid.UUID] = None) -> List[dict]:
         """
         Generate `count` activation keys for an App.
         Each key represents one company license with all company-specific data.
@@ -95,55 +168,94 @@ class AdminAppService:
             hashed = get_password_hash(raw_key)
             internal_token = secrets.token_urlsafe(48)
 
-            db_key = await AdminRepo.create_activation_key(
-                db=db,
-                app_id=key_in.app_id,
-                key_hash=hashed,
-                token=internal_token,
-                expiry_date=key_in.expiry_date,
-                company_name=key_in.company_name,
-                logo_url=key_in.logo_url,
-                signup_image_url=key_in.signup_image_url,
-                email=key_in.email,
-                address=key_in.address,
-                phone=key_in.phone,
-                mobile_number=key_in.mobile_number,
-                whatsapp_number=key_in.whatsapp_number,
-                labels=[label.model_dump() for label in key_in.labels] if key_in.labels else [],
-                bill_header_1=key_in.bill_header_1,
-                bill_header_2=key_in.bill_header_2,
-                bill_header_3=key_in.bill_header_3,
-                bill_footer=key_in.bill_footer,
-            )
+            try:
+                # --- Step 1: Pre-generation Uniqueness Check ---
+                # Check for existing ACTIVE or EXPIRING_SOON licenses for this exact combination
+                # We do this twice: once manually for clean feedback, and once via DB constraint
+                existing_check = await db.execute(
+                    select(ActivationKey).where(
+                        ActivationKey.app_id == key_in.app_id,
+                        ActivationKey.company_name == key_in.company_name,
+                        ActivationKey.email == key_in.email,
+                        ActivationKey.whatsapp_number == key_in.whatsapp_number,
+                        ActivationKey.status.in_(["ACTIVE", "EXPIRING_SOON"])
+                    )
+                )
+                if existing_check.scalars().first():
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"An active license already exists for '{key_in.company_name}' with these contact details."
+                    )
 
-            # Create Version 1 of Schema
-            initial_labels = key_in.labels or []
-            schema_v1 = ActivationKeySchema(
-                activation_key_id=db_key.id,
-                version=1,
-                labels=db_key.labels,  # Use the already converted list from db_key
-                etag=get_etag(db_key.labels)
-            )
-            db.add(schema_v1)
+                db_key = await AdminRepo.create_activation_key(
+                    db=db,
+                    app_id=key_in.app_id,
+                    key_hash=hashed,
+                    token=internal_token,
+                    expiry_date=key_in.expiry_date,
+                    company_name=key_in.company_name,
+                    logo_url=key_in.logo_url,
+                    signup_image_url=key_in.signup_image_url,
+                    email=key_in.email,
+                    address=key_in.address,
+                    phone=key_in.phone,
+                    mobile_number=key_in.mobile_number,
+                    whatsapp_number=key_in.whatsapp_number,
+                    labels=[label.model_dump() for label in key_in.labels] if key_in.labels else [],
+                    bill_header_1=key_in.bill_header_1,
+                    bill_header_3=key_in.bill_header_3,
+                    bill_footer=key_in.bill_footer,
+                )
 
-            generated.append({
-                "id": str(db_key.id),
-                "raw_activation_key": raw_key,   # Shown to admin ONCE — never stored plain
-                "company_name": db_key.company_name,
-                "expiry_date": db_key.expiry_date.isoformat(),
-                "status": db_key.status,
-                "email": db_key.email,
-                "whatsapp_number": db_key.whatsapp_number,
-                "message": key_in.message,
-                "subject": key_in.subject,
-                "body": key_in.body,
-                "app_id_str": app.app_id
-            })
+                # Create audit history for generation
+                await AdminRepo.create_history_entry(
+                    db, 
+                    key_id=db_key.id,
+                    new_status="ACTIVE",
+                    reason="GENERATION",
+                    new_expiry=db_key.expiry_date,
+                    changed_by=admin_id
+                )
 
+                # Create Version 1 of Schema
+                initial_labels = key_in.labels or []
+                schema_v1 = ActivationKeySchema(
+                    activation_key_id=db_key.id,
+                    version=1,
+                    labels=db_key.labels,
+                    etag=get_etag(db_key.labels)
+                )
+                db.add(schema_v1)
+                await db.flush() # Ensure identity constraint is checked before loop continues
+
+                generated.append({
+                    "id": str(db_key.id),
+                    "raw_activation_key": raw_key,   # Shown to admin ONCE — never stored plain
+                    "company_name": db_key.company_name,
+                    "expiry_date": db_key.expiry_date.isoformat(),
+                    "status": db_key.status,
+                    "email": db_key.email,
+                    "whatsapp_number": db_key.whatsapp_number,
+                    "message": key_in.message,
+                    "subject": key_in.subject,
+                    "body": key_in.body,
+                    "app_id_str": app.app_id
+                })
+            except Exception as e:
+                if isinstance(e, IntegrityError):
+                    await db.rollback()
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="Conflict: A license with these details already exists or was generated simultaneously."
+                    )
+                raise e
+
+        # Commit all successful generations
+        await db.commit()
         return generated
 
     @staticmethod
-    async def update_key(db: AsyncSession, key_id: uuid.UUID, update_in: ActivationKeyUpdate):
+    async def update_key(db: AsyncSession, key_id: uuid.UUID, update_in: ActivationKeyUpdate, admin_id: Optional[uuid.UUID] = None):
         """Update company details, billing, expiry, or status on a key."""
         key = await AdminRepo.get_key_by_uuid(db, key_id)
         if not key:
@@ -170,7 +282,43 @@ class AdminAppService:
         for field, value in update_data.items():
             setattr(key, field, value)
 
-        return await AdminRepo.update_key(db, key)
+        # Atomic Status Recalculation if expiry changes
+        prev_status = key.status
+        prev_expiry = key.expiry_date
+        
+        if "expiry_date" in update_data:
+            now = datetime.now(timezone.utc)
+            new_expiry = update_data["expiry_date"]
+            if new_expiry > now:
+                # Re-activate if it was expired
+                key.status = "ACTIVE"
+                key.expired_at = None
+                key.last_notification_sent = None # Reset sequence
+                
+                # Check for "Expiring Soon" window (7 days)
+                if new_expiry <= (now + timedelta(days=7)):
+                    key.status = "EXPIRING_SOON"
+            else:
+                key.status = "EXPIRED"
+                key.expired_at = now
+
+        updated_key = await AdminRepo.update_key(db, key)
+        
+        # Track history if status or expiry changed
+        if "status" in update_data or "expiry_date" in update_data:
+            reason = "EXTENSION" if "expiry_date" in update_data else "STATUS_CHANGE"
+            await AdminRepo.create_history_entry(
+                db,
+                key_id=key.id,
+                prev_status=prev_status,
+                new_status=key.status,
+                prev_expiry=prev_expiry,
+                new_expiry=key.expiry_date,
+                reason=reason,
+                changed_by=admin_id
+            )
+            
+        return updated_key
 
     @staticmethod
     async def rotate_token(db: AsyncSession, key_id: uuid.UUID):
@@ -192,13 +340,25 @@ class AdminAppService:
         return await AdminRepo.update_key(db, key)
 
     @staticmethod
-    async def revoke_key(db: AsyncSession, key_id: uuid.UUID):
+    async def revoke_key(db: AsyncSession, key_id: uuid.UUID, admin_id: Optional[uuid.UUID] = None):
         key = await AdminRepo.get_key_by_uuid(db, key_id)
         if not key:
             raise HTTPException(status_code=404, detail="Activation key not found")
-        key.status = "revoked"
+        
+        prev_status = key.status
+        key.status = "REVOKED"
         key.revoked_at = datetime.now(timezone.utc)
-        return await AdminRepo.update_key(db, key)
+        res = await AdminRepo.update_key(db, key)
+        
+        await AdminRepo.create_history_entry(
+            db,
+            key_id=key.id,
+            prev_status=prev_status,
+            new_status="REVOKED",
+            reason="REVOCATION",
+            changed_by=admin_id
+        )
+        return res
 
     # ─────────────────────────────────────────
     # Hardware Device Activation
@@ -226,6 +386,12 @@ class AdminAppService:
           - Known machine → UPDATE key_id only if currently NULL
             (prevents accidental reassignment on re-activation)
         """
+        # --- Fallback Recalculation Layer ---
+        # Before any verification, we should ensure all keys in memory have fresh statuses
+        # We do this by iterating and checking current time against expiry.
+        # This acts as a safety layer for if Celery beat is down.
+        pass # We will do it lazily for the matched key below to save overhead.
+
         all_keys = await AdminRepo.get_all_keys(db)
 
         matched_key = None
@@ -263,7 +429,11 @@ class AdminAppService:
                 detail="This key does not belong to the selected application."
             )
 
-        if matched_key.status != "active":
+        # --- RECALCULATE STATUS (Fallback check) ---
+        now = datetime.now(timezone.utc)
+        await AdminAppService._ensure_status_freshness(db, matched_key, now)
+
+        if matched_key.status != "ACTIVE" and matched_key.status != "EXPIRING_SOON":
             await AdminRepo.create_notification(
                 db,
                 message=f"Attempt to use {matched_key.status} key for company '{matched_key.company_name}'.",
@@ -274,11 +444,8 @@ class AdminAppService:
             )
             raise HTTPException(status_code=403, detail=f"License is {matched_key.status}")
 
-        # Check expiry
-        now = datetime.now(timezone.utc)
+        # Check expiry (redundant but safe)
         if matched_key.expiry_date < now:
-            matched_key.status = "expired"
-            await AdminRepo.update_key(db, matched_key)
             raise HTTPException(status_code=403, detail="License has expired")
 
         # GAP-1 FIX: Pre-register Machine in PostgreSQL if machine_id provided.
@@ -368,9 +535,9 @@ class AdminAppService:
         return {
             "total_apps": len(apps),
             "total_keys": total_keys,
-            "active_keys": status_counts.get("active", 0),
-            "expired_keys": status_counts.get("expired", 0),
-            "revoked_keys": status_counts.get("revoked", 0),
+            "active_keys": status_counts.get("ACTIVE", 0) + status_counts.get("EXPIRING_SOON", 0),
+            "expired_keys": status_counts.get("EXPIRED", 0),
+            "revoked_keys": status_counts.get("REVOKED", 0),
             "recent_notifications": notif_count,
         }
 
@@ -415,3 +582,35 @@ class AdminAppService:
             })
 
         return activity
+
+    @staticmethod
+    async def _ensure_status_freshness(db: AsyncSession, key: ActivationKey, now: datetime):
+        """
+        Safety layer: Recalculates status in-place if background worker is delayed.
+        Ensures audit logging for these automated transitions.
+        """
+        prev_status = key.status
+        if key.expiry_date < now and key.status not in ["EXPIRED", "REVOKED"]:
+            key.status = "EXPIRED"
+            key.expired_at = now
+            await AdminRepo.update_key(db, key)
+            await AdminRepo.create_history_entry(
+                db, 
+                key_id=key.id, 
+                prev_status=prev_status, 
+                new_status="EXPIRED", 
+                reason="AUTO_EXPIRY_FALLBACK"
+            )
+            logger.warning("[Fallback] Key %s auto-expired during activation fallback check.", key.id)
+        
+        elif key.status == "ACTIVE" and key.expiry_date <= (now + timedelta(days=7)):
+            key.status = "EXPIRING_SOON"
+            await AdminRepo.update_key(db, key)
+            await AdminRepo.create_history_entry(
+                db, 
+                key_id=key.id, 
+                prev_status=prev_status, 
+                new_status="EXPIRING_SOON", 
+                reason="AUTO_STATUS_TRANSITION_FALLBACK"
+            )
+            logger.info("[Fallback] Key %s transitioned to EXPIRING_SOON during activation fallback check.", key.id)

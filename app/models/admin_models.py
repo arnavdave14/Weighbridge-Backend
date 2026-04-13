@@ -5,10 +5,10 @@ Architecture:
   ActivationKey = One company license, holds ALL company-specific data.
 """
 import uuid
-from sqlalchemy import Column, String, DateTime, JSON, ForeignKey, Boolean, Text, Integer, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, JSON, ForeignKey, Boolean, Text, Integer, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, backref
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, and_
 from app.database.admin_base import AdminBase
 
 
@@ -42,7 +42,22 @@ class App(AdminBase):
     email_sender = Column(String, nullable=True)            # Display name or sender address override
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # --- Per-Company SMTP Configuration ---
+    smtp_enabled = Column(Boolean, default=False, nullable=False)
+    smtp_host = Column(String, nullable=True, default="smtp.gmail.com")
+    smtp_port = Column(Integer, nullable=True, default=587)
+    smtp_user = Column(String, nullable=True)
+    smtp_password = Column(String, nullable=True) # Encrypted at rest
+    from_email = Column(String, nullable=True)
+    from_name = Column(String, nullable=True)
+    smtp_status = Column(String, default="UNTESTED", nullable=False) # VALID | INVALID | UNTESTED
+
+    __table_args__ = (
+        UniqueConstraint("app_name", name="uq_app_name"),
+    )
 
     # Relationships
     keys = relationship("ActivationKey", back_populates="app", cascade="all, delete-orphan")
@@ -70,11 +85,14 @@ class ActivationKey(AdminBase):
     token_rotation_grace_expiry = Column(DateTime(timezone=True), nullable=True)
 
     # --- License Status ---
-    status = Column(String, default="active", nullable=False)  # active | expired | revoked
+    status = Column(String, default="ACTIVE", nullable=False)  # ACTIVE | EXPIRING_SOON | EXPIRED | REVOKED
     current_version = Column(Integer, default=1, nullable=False)
     expiry_date = Column(DateTime(timezone=True), nullable=False)
+    issued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    revoked_at = Column(DateTime(timezone=True), nullable=True)  # Track when a license is cancelled
+    expired_at = Column(DateTime(timezone=True), nullable=True)    # Track exactly when it transitioned to EXPIRED
+    revoked_at = Column(DateTime(timezone=True), nullable=True)    # Track when a license is cancelled
+    last_notification_sent = Column(DateTime(timezone=True), nullable=True)
 
     # ──────────────────────────────────────────────────
     # ALL COMPANY DATA LIVES HERE (Activation Key Level)
@@ -107,6 +125,16 @@ class ActivationKey(AdminBase):
     app = relationship("App", back_populates="keys")
     notifications = relationship("Notification", back_populates="activation_key")
     schema_versions = relationship("ActivationKeySchema", back_populates="activation_key", cascade="all, delete-orphan")
+    history = relationship("ActivationKeyHistory", back_populates="activation_key", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index(
+            "uq_active_license_identity",
+            "app_id", "company_name", "email", "whatsapp_number",
+            unique=True,
+            postgresql_where=(and_(Column("status").in_(["ACTIVE", "EXPIRING_SOON"])))
+        ),
+    )
 
 
 class ActivationKeySchema(AdminBase):
@@ -128,6 +156,30 @@ class ActivationKeySchema(AdminBase):
     __table_args__ = (
         UniqueConstraint("activation_key_id", "version", name="uq_key_version"),
     )
+
+
+class ActivationKeyHistory(AdminBase):
+    """
+    Audit log for license lifecycle events.
+    Tracks status changes, expiry extensions, and system-level actions.
+    """
+    __tablename__ = "activation_key_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    activation_key_id = Column(UUID(as_uuid=True), ForeignKey("activation_keys.id"), nullable=False, index=True)
+    
+    prev_status = Column(String, nullable=True)
+    new_status = Column(String, nullable=False)
+    
+    prev_expiry = Column(DateTime(timezone=True), nullable=True)
+    new_expiry = Column(DateTime(timezone=True), nullable=True)
+    
+    reason = Column(String, nullable=False) # e.g. "EXTENSION", "REVOCATION", "GENERATION", "AUTO_EXPIRY"
+    changed_by = Column(UUID(as_uuid=True), ForeignKey("admin_users.id"), nullable=True)
+    changed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    activation_key = relationship("ActivationKey", back_populates="history")
+    admin = relationship("AdminUser")
 
 
 class MachineNonce(AdminBase):
