@@ -9,6 +9,7 @@ import AppHistory from './pages/AppHistory'
 import DLQDashboard from './pages/DLQDashboard'
 import Receipts from './pages/Receipts'
 import Employees from './pages/Employees'
+import DocumentDashboard from './pages/DocumentDashboard'
 import { ToastProvider } from './context/ToastContext'
 import { Toaster } from './components/Toaster'
 
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="notifications" element={<Notifications />} />
             <Route path="dlq" element={<DLQDashboard />} />
             <Route path="receipts" element={<Receipts />} />
+            <Route path="documents" element={<DocumentDashboard />} />
             <Route path="employees" element={<Employees />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

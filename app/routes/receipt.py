@@ -24,9 +24,7 @@ async def sync_receipts(
     sync_result, new_receipts = await SyncService.process_batch_sync(db, sync_data)
     
     # Get the machine for settings (contains the owner's mobile number)
-    from app.services.whatsapp_service import send_whatsapp_message
-    from app.services.sms_service import send_sms_fast2sms
-    from app.services.email_service import send_email_receipt
+    from app.services.document_delivery_service import DocumentDeliveryService
 
     stmt = select(Machine).where(Machine.machine_id == sync_data.machine_id)
     res = await db.execute(stmt)
@@ -53,37 +51,39 @@ async def sync_receipts(
         targets_phone = set(filter(None, [owner_phone, customer_phone]))
         targets_email = set(filter(None, [owner_email, customer_email]))
 
-        # Send WhatsApp (Gupshup) to all targets
+        # We trigger Document Delivery for each distinct combination of targets
+        # To avoid sending the same document 4 times, we'll just send once per target list.
+        # Simple loop: pick one primary target if multiple, but our new service is built for one-to-one.
+        # We will dispatch a background delivery job for each target pair.
+        # In a real business scenario you'd group them or loop.
+        
+        metadata = receipt.custom_data or {}
+        metadata["share_token"] = receipt.share_token
+        metadata["truck_no"] = vehicle
+        metadata["weight"] = net_weight
+
         for p in targets_phone:
             background_tasks.add_task(
-                send_whatsapp_message,
-                receipt_id=receipt.id,
-                phone=str(p),
-                vehicle=str(vehicle),
-                weight=net_weight,
-                token=receipt.share_token
+                DocumentDeliveryService.process_and_deliver_document,
+                key_id=machine.key_id if machine else None,
+                document_type="receipt",
+                document_name=f"receipt_{receipt.local_id}.html",
+                document_bytes=None,
+                metadata_json=metadata,
+                target_email=None,
+                target_whatsapp=str(p)
             )
 
-        # Send Text SMS (Fast2SMS) to all targets
-        for p in targets_phone:
-            background_tasks.add_task(
-                send_sms_fast2sms,
-                receipt_id=receipt.id,
-                phone=str(p),
-                vehicle=str(vehicle),
-                weight=net_weight,
-                token=receipt.share_token
-            )
-            
-        # Send Email to all targets
         for e in targets_email:
             background_tasks.add_task(
-                send_email_receipt,
-                receipt_id=receipt.id,
-                email=str(e),
-                vehicle=str(vehicle),
-                weight=net_weight,
-                token=receipt.share_token
+                DocumentDeliveryService.process_and_deliver_document,
+                key_id=machine.key_id if machine else None,
+                document_type="receipt",
+                document_name=f"receipt_{receipt.local_id}.html",
+                document_bytes=None,
+                metadata_json=metadata,
+                target_email=str(e),
+                target_whatsapp=None
             )
             
     return sync_result

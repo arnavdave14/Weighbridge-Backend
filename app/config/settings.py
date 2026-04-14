@@ -37,6 +37,7 @@ class Settings:
     
     # Notification Hardening
     NOTIF_IDEMPOTENCY_WINDOW: int = 60
+    ACTIVATION_KEY_CACHE_TTL: int = 60
     RATE_LIMIT_RECEIVER: int = 5
     RATE_LIMIT_TENANT: int = 50
     NOTIFICATION_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("NOTIFICATION_RATE_LIMIT_PER_MINUTE", "10"))

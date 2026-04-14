@@ -1,4 +1,5 @@
-from pydantic import BaseModel, UUID4, field_validator
+from pydantic import BaseModel, UUID4, field_validator, EmailStr
+import re
 from typing import Optional, List
 from datetime import datetime
 
@@ -10,34 +11,13 @@ from datetime import datetime
 class AppCreate(BaseModel):
     app_name: str
     description: Optional[str] = None
-    whatsapp_sender_channel: Optional[str] = None
-    email_sender: Optional[str] = None
-    
-    # Per-Company SMTP
-    smtp_enabled: bool = False
-    smtp_host: Optional[str] = "smtp.gmail.com"
-    smtp_port: Optional[int] = 587
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None
-    from_email: Optional[str] = None
-    from_name: Optional[str] = None
+
 
 
 class AppUpdate(BaseModel):
     app_name: Optional[str] = None
     description: Optional[str] = None
-    whatsapp_sender_channel: Optional[str] = None
-    email_sender: Optional[str] = None
 
-    # Per-Company SMTP update
-    smtp_enabled: Optional[bool] = None
-    smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None
-    from_email: Optional[str] = None
-    from_name: Optional[str] = None
-    smtp_status: Optional[str] = None
 
 
 class AppRead(BaseModel):
@@ -45,17 +25,7 @@ class AppRead(BaseModel):
     app_id: str
     app_name: str
     description: Optional[str] = None
-    whatsapp_sender_channel: Optional[str] = None
-    email_sender: Optional[str] = None
-    
-    # SMTP Public Fields (Excludes Password)
-    smtp_enabled: bool
-    smtp_host: Optional[str]
-    smtp_port: Optional[int]
-    smtp_user: Optional[str]
-    from_email: Optional[str]
-    from_name: Optional[str]
-    smtp_status: str
+
     
     created_at: datetime
     keys_count: int = 0
@@ -104,6 +74,65 @@ class ActivationKeyCreate(BaseModel):
 
     bill_footer: Optional[str] = None
 
+    # --- Communication Settings (Multi-tenant) ---
+    smtp_enabled: bool = False
+    smtp_host: Optional[str] = "smtp.gmail.com"
+    smtp_port: Optional[int] = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    
+    whatsapp_sender_channel: Optional[str] = None
+    email_sender: Optional[str] = None
+
+    @field_validator("smtp_host")
+    @classmethod
+    def validate_smtp_host(cls, v):
+        if not v: return v
+        # Basic hostname/IP regex
+        pattern = r"^[a-zA-Z0-9\.-]+$"
+        if not re.match(pattern, v):
+            raise ValueError("Invalid SMTP host format.")
+        return v
+
+    @field_validator("smtp_port")
+    @classmethod
+    def validate_smtp_port(cls, v):
+        if v is not None and (v < 1 or v > 65535):
+            raise ValueError("SMTP port must be between 1 and 65535.")
+        return v
+
+    @field_validator("whatsapp_sender_channel")
+    @classmethod
+    def validate_wa_channel(cls, v):
+        if not v: return v
+        # Format: <number>:<id> e.g. 919893224689:5
+        if ":" not in v:
+            raise ValueError("WhatsApp channel must be in format 'number:id'.")
+        parts = v.split(":")
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            raise ValueError("WhatsApp channel components must be numeric.")
+        return v
+
+    @field_validator("smtp_password")
+    @classmethod
+    def validate_smtp_pass(cls, v, info):
+        smtp_enabled = info.data.get("smtp_enabled", False)
+        if smtp_enabled and not v:
+            raise ValueError("SMTP password is required when SMTP is enabled.")
+        return v
+
+    @field_validator("smtp_user")
+    @classmethod
+    def validate_smtp_user(cls, v, info):
+        if not v: return v
+        # Strict email check as requested
+        pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        if not re.match(pattern, v):
+            raise ValueError("SMTP User must be a valid email address.")
+        return v
+
 
 class ActivationKeyUpdate(BaseModel):
     """Update company details, billing config, expiry, or status."""
@@ -122,6 +151,54 @@ class ActivationKeyUpdate(BaseModel):
     bill_footer: Optional[str] = None
     status: Optional[str] = None
     expiry_date: Optional[datetime] = None
+
+    # Communication Settings Update
+    smtp_enabled: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+    smtp_status: Optional[str] = None
+    whatsapp_sender_channel: Optional[str] = None
+    email_sender: Optional[str] = None
+
+    @field_validator("smtp_host")
+    @classmethod
+    def validate_smtp_host(cls, v):
+        if not v: return v
+        pattern = r"^[a-zA-Z0-9\.-]+$"
+        if not re.match(pattern, v):
+            raise ValueError("Invalid SMTP host format.")
+        return v
+
+    @field_validator("smtp_port")
+    @classmethod
+    def validate_smtp_port(cls, v):
+        if v is not None and (v < 1 or v > 65535):
+            raise ValueError("SMTP port must be between 1 and 65535.")
+        return v
+
+    @field_validator("whatsapp_sender_channel")
+    @classmethod
+    def validate_wa_channel(cls, v):
+        if not v: return v
+        if ":" not in v:
+            raise ValueError("WhatsApp channel must be in format 'number:id'.")
+        parts = v.split(":")
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            raise ValueError("WhatsApp channel components must be numeric.")
+        return v
+
+    @field_validator("smtp_user")
+    @classmethod
+    def validate_smtp_user(cls, v):
+        if not v: return v
+        pattern = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        if not re.match(pattern, v):
+            raise ValueError("SMTP User must be a valid email address.")
+        return v
 
 
 class ActivationKeyRead(BaseModel):
@@ -146,6 +223,17 @@ class ActivationKeyRead(BaseModel):
     bill_footer: Optional[str] = None
     whatsapp_status: str = "pending"
     email_status: str = "pending"
+
+    # Communication Settings
+    smtp_enabled: bool
+    smtp_host: Optional[str]
+    smtp_port: Optional[int]
+    smtp_user: Optional[str]
+    from_email: Optional[str]
+    from_name: Optional[str]
+    smtp_status: str
+    whatsapp_sender_channel: Optional[str]
+    email_sender: Optional[str]
 
     class Config:
         from_attributes = True

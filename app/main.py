@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts, employee_auth, integrity
+from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts, admin_documents, employee_auth, integrity
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
@@ -38,6 +38,13 @@ async def lifespan(app: "FastAPI"):
     # --- STARTUP ---
     # 0. Validate Environment & Setup Directories
     settings.validate_and_setup()
+
+    # 0.1 Verify Redis Status
+    from app.core.rate_limiter import rate_limiter
+    if rate_limiter.ping():
+        logger.info("✅ Redis Connected")
+    else:
+        logger.warning("⚠️ Redis Unavailable (Fail-Open Mode)")
     
     # --- [DATABASE INITIALIZATION] ---
     # Automatically create/migrate tables for Local SQLite
@@ -177,6 +184,7 @@ app.include_router(notifications.router)
 app.include_router(admin_branding.router)
 app.include_router(admin_dlq.router)
 app.include_router(admin_receipts.router)
+app.include_router(admin_documents.router, prefix="/admin/documents", tags=["Admin Documents"])
 
 # Employee Auth (device-facing + admin employee management)
 app.include_router(employee_auth.router)

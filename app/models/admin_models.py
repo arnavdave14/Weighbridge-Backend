@@ -5,7 +5,7 @@ Architecture:
   ActivationKey = One company license, holds ALL company-specific data.
 """
 import uuid
-from sqlalchemy import Column, String, DateTime, JSON, ForeignKey, Boolean, Text, Integer, UniqueConstraint, Index
+from sqlalchemy import Column, String, DateTime, JSON, ForeignKey, Boolean, Text, Integer, UniqueConstraint, Index, Float
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func, and_
@@ -37,23 +37,9 @@ class App(AdminBase):
     app_name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     
-    # Sender Configuration (Multi-tenant)
-    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "919893224689:5"
-    email_sender = Column(String, nullable=True)            # Display name or sender address override
-    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
-
-    # --- Per-Company SMTP Configuration ---
-    smtp_enabled = Column(Boolean, default=False, nullable=False)
-    smtp_host = Column(String, nullable=True, default="smtp.gmail.com")
-    smtp_port = Column(Integer, nullable=True, default=587)
-    smtp_user = Column(String, nullable=True)
-    smtp_password = Column(String, nullable=True) # Encrypted at rest
-    from_email = Column(String, nullable=True)
-    from_name = Column(String, nullable=True)
-    smtp_status = Column(String, default="UNTESTED", nullable=False) # VALID | INVALID | UNTESTED
 
     __table_args__ = (
         UniqueConstraint("app_name", name="uq_app_name"),
@@ -109,6 +95,20 @@ class ActivationKey(AdminBase):
     phone = Column(String, nullable=True)
     mobile_number = Column(String, nullable=True)
     whatsapp_number = Column(String, nullable=True)
+
+    # --- Per-Company SMTP Configuration ---
+    smtp_enabled = Column(Boolean, default=False, nullable=False)
+    smtp_host = Column(String, nullable=True, default="smtp.gmail.com")
+    smtp_port = Column(Integer, nullable=True, default=587)
+    smtp_user = Column(String, nullable=True)
+    smtp_password = Column(String, nullable=True) # Encrypted at rest
+    from_email = Column(String, nullable=True)
+    from_name = Column(String, nullable=True)
+    smtp_status = Column(String, default="UNTESTED", nullable=False) # VALID | INVALID | UNTESTED
+
+    # WhatsApp Overrides
+    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "919893224689:5"
+    email_sender = Column(String, nullable=True)            # Optional display name override
 
     # --- Bill / Receipt Configuration ---
     labels = Column(JSON, nullable=True, server_default="[]")  # Dynamic label array
@@ -259,6 +259,35 @@ class FailedNotification(AdminBase):
 
     failed_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+class DocumentDeliveryLog(AdminBase):
+    """
+    Log of all business documents sent out via the system.
+    Strictly separates business data from system credentials.
+    """
+    __tablename__ = "document_delivery_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key_id = Column(UUID(as_uuid=True), ForeignKey("activation_keys.id"), nullable=True, index=True)
+    company_name = Column(String, nullable=True)
+    document_type = Column(String, nullable=False, index=True) # receipt, invoice, bill
+    document_name = Column(String, nullable=False)
+    delivery_channel = Column(String, nullable=False) # email, whatsapp, both
+    email_used = Column(String, nullable=True)
+    whatsapp_channel = Column(String, nullable=True)
+    sender_name = Column(String, nullable=True)
+    provider_type = Column(String, nullable=True) # key, system
+    status = Column(String, nullable=False, index=True) # SUCCESS, FAILED
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0)
+    latency = Column(Float, nullable=True)
+    
+    metadata_json = Column(JSON, nullable=True)
+    attachments = Column(JSON, nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    activation_key = relationship("ActivationKey")
 
 
 

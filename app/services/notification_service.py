@@ -107,11 +107,11 @@ class NotificationService:
         start_time = time.time()
         try:
             sender_channel = None
-            app_id_str = key_data.get("app_id_str")
-            if app_id_str:
+            key_id = key_data.get("id")
+            if key_id:
                 async with remote_session() as db:
-                    app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
-                    if app: sender_channel = app.whatsapp_sender_channel
+                    key = await AdminRepo.get_key_by_uuid(db, uuid.UUID(key_id))
+                    if key: sender_channel = key.whatsapp_sender_channel
 
             await NotificationService._send_whatsapp_safe(phone, key_data, app_name, sender_channel=sender_channel)
             metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="sent").inc()
@@ -138,11 +138,11 @@ class NotificationService:
         start_time = time.time()
         try:
             sender_name = None
-            app_id_str = key_data.get("app_id_str")
-            if app_id_str:
+            key_id = key_data.get("id")
+            if key_id:
                 async with remote_session() as db:
-                    app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
-                    if app: sender_name = app.email_sender
+                    key = await AdminRepo.get_key_by_uuid(db, uuid.UUID(key_id))
+                    if key: sender_name = key.email_sender
 
             await NotificationService._send_email_safe(email, key_data, app_name, sender_name=sender_name)
             metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="sent").inc()
@@ -172,6 +172,8 @@ class NotificationService:
         import redis
         try:
             r = rate_limiter.redis_client
+            if not rate_limiter.is_connected:
+                return False
             full_key = f"notif_idempotency:{idempotency_key}"
             # Returns True if set (not duplicate), False if already exists (duplicate)
             is_new = r.set(full_key, "1", ex=settings.NOTIF_IDEMPOTENCY_WINDOW, nx=True)
@@ -179,6 +181,65 @@ class NotificationService:
         except redis.RedisError as e:
             logger.error(f"Redis Error in idempotency check: {e}. Defaulting to NOT duplicate.")
             return False
+
+    @staticmethod
+    async def _get_hydrated_key_config(key_id: str) -> Optional[Any]:
+        """
+        Fetches the ActivationKey configuration with short-lived caching.
+        TTL: 60s (from settings)
+        """
+        if not key_id or key_id == "unknown":
+            return None
+
+        from app.core.rate_limiter import rate_limiter
+        import redis
+        import json
+        
+        cache_key = f"license_config:{key_id}"
+        cached_data = None
+        
+        try:
+            if rate_limiter.is_connected:
+                cached_data = rate_limiter.redis_client.get(cache_key)
+        except redis.RedisError:
+            pass
+
+        if cached_data:
+            try:
+                # We return a simple object that mocks the SQLAlchemy model properties
+                # for common communication fields.
+                data = json.loads(cached_data)
+                class CachedKey: pass
+                obj = CachedKey()
+                for k, v in data.items(): setattr(obj, k, v)
+                return obj
+            except Exception:
+                pass
+
+        # Cache miss or Redis down -> Fetch from DB
+        async with remote_session() as db:
+            key = await AdminRepo.get_key_by_uuid(db, uuid.UUID(str(key_id)))
+            if key:
+                # Prepare data for cache
+                config_fields = [
+                    "id", "smtp_enabled", "smtp_host", "smtp_port", "smtp_user", 
+                    "smtp_password", "from_email", "from_name", "smtp_status", 
+                    "whatsapp_sender_channel", "email_sender"
+                ]
+                cache_payload = {field: getattr(key, field) for field in config_fields if hasattr(key, field)}
+                # Convert UUID and datetime if any
+                for k, v in cache_payload.items():
+                    if isinstance(v, uuid.UUID): cache_payload[k] = str(v)
+                
+                try:
+                    if rate_limiter.is_connected:
+                        rate_limiter.redis_client.set(cache_key, json.dumps(cache_payload), ex=settings.ACTIVATION_KEY_CACHE_TTL)
+                except redis.RedisError:
+                    pass
+                
+                return key
+                
+        return None
 
     @staticmethod
     async def _notify_license_generation_async_orchestrated(
@@ -258,22 +319,10 @@ class NotificationService:
             start_time = time.time()
             try:
                 if channel == "whatsapp":
-                    sender_channel = None
-                    app_id_str = key_data.get("app_id_str")
-                    if app_id_str:
-                        async with remote_session() as db:
-                            app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
-                            if app: sender_channel = app.whatsapp_sender_channel
-                    await NotificationService._send_whatsapp_safe(target, key_data, app_name, sender_channel=sender_channel)
+                    await NotificationService._send_whatsapp_safe(target, key_data, app_name)
                 
                 elif channel == "email":
-                    sender_name = None
-                    app_id_str = key_data.get("app_id_str")
-                    if app_id_str:
-                        async with remote_session() as db:
-                            app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
-                            if app: sender_name = app.email_sender
-                    await NotificationService._send_email_safe(target, key_data, app_name, sender_name=sender_name)
+                    await NotificationService._send_email_safe(target, key_data, app_name)
                 
                 result_state["success"].append(channel)
                 metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status="sent").inc()
@@ -286,27 +335,33 @@ class NotificationService:
         return result_state
 
     @staticmethod
-    async def get_smtp_provider_for_app(app: Any) -> Optional[SMTPProvider]:
+    async def get_smtp_provider_for_key(key: Any) -> Optional[SMTPProvider]:
         """
         Logic:
-        IF app.smtp_enabled == true AND smtp_status == VALID:
+        IF key.smtp_enabled == true AND smtp_status == VALID AND all fields present:
         → use company SMTP (decrypt password)
         ELSE:
         → return None (Fallback)
         """
-        if not app.smtp_enabled or app.smtp_status != "VALID":
+        if not key.smtp_enabled or key.smtp_status != "VALID":
             return None
         
+        # Performance/Robustness: Check for partial configuration
+        required = ["smtp_host", "smtp_port", "smtp_user", "smtp_password"]
+        if not all(getattr(key, f) for f in required):
+            logger.warning(f"Key {key.id} has SMTP enabled but is partially configured. Falling back.")
+            return None
+
         try:
-            decrypted_pass = decrypt_password(app.smtp_password)
+            decrypted_pass = decrypt_password(key.smtp_password)
             return SMTPProvider(
-                host=app.smtp_host,
-                port=app.smtp_port,
-                user=app.smtp_user,
+                host=key.smtp_host,
+                port=key.smtp_port,
+                user=key.smtp_user,
                 password=decrypted_pass
             )
         except Exception as e:
-            logger.error(f"Failed to initialize Company SMTP for App {app.app_name}: {e}")
+            logger.error(f"Failed to initialize Company SMTP for Key {key.id}: {e}")
             return None
 
     @staticmethod
@@ -314,76 +369,86 @@ class NotificationService:
         structured_log(logger, logging.INFO, "notification_initiated", channel="email", target=email)
         
         # 1. Resolve App and Provider
-        app_id_str = key_data.get("app_id_str")
         key_id = key_data.get("id")
         
-        app = None
+        key = await NotificationService._get_hydrated_key_config(key_id)
         company_provider = None
         
-        async with remote_session() as db:
-            if app_id_str:
-                app = await AdminRepo.get_app_by_app_id_string(db, app_id_str)
-            
-            if app:
-                company_provider = await NotificationService.get_smtp_provider_for_app(app)
+        if key:
+            company_provider = await NotificationService.get_smtp_provider_for_key(key)
 
             # 2. Attempt Company SMTP if available
             if company_provider:
                 res = await email_service.send_license_email(
                     email, key_data, app_name, 
-                    sender_name=app.from_name or sender_name,
+                    sender_name=key.from_name or sender_name,
                     providerOverride=company_provider
                 )
                 
                 if res.get("status") == "success":
-                    await AdminRepo.create_history_entry(
-                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                        reason="EMAIL_SENT_COMPANY"
-                    )
-                    structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="company")
+                    async with remote_session() as db:
+                        await AdminRepo.create_history_entry(
+                            db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                            reason="EMAIL_SENT_COMPANY"
+                        )
+                    structured_log(logger, logging.INFO, "notification_completed", 
+                                   channel="email", target=email, provider="key", 
+                                   key_id=key_id, sender_name=key.from_name or sender_name)
                     return
                 else:
                     error_msg = res.get("reason", "Unknown failure")
-                    await AdminRepo.create_history_entry(
-                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                        reason="EMAIL_FAILED_COMPANY",
-                        # We'll put the error in a dedicated message if we had one, 
-                        # but for now we'll append to reason or just log it.
-                    )
-                    structured_log(logger, logging.WARNING, "notification_failure_company", channel="email", target=email, error_message=error_msg)
+                    async with remote_session() as db:
+                        await AdminRepo.create_history_entry(
+                            db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                            reason="EMAIL_FAILED_COMPANY"
+                        )
+                    structured_log(logger, logging.WARNING, "notification_failure_key", 
+                                   channel="email", target=email, error_message=error_msg, key_id=key_id)
                     # Proceed to fallback
-                    await AdminRepo.create_history_entry(
-                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                        reason="EMAIL_FALLBACK_SYSTEM"
-                    )
+                    structured_log(logger, logging.INFO, "notification_fallback_triggered", channel="email", target=email, key_id=key_id)
 
             # 3. System Fallback
+            structured_log(logger, logging.INFO, "using_system_fallback", channel="email", target=email, key_id=key_id)
             res = await email_service.send_license_email(email, key_data, app_name, sender_name=sender_name)
             
             if res.get("status") == "success":
-                await AdminRepo.create_history_entry(
-                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                    reason="EMAIL_SENT_SYSTEM"
-                )
-                structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="system")
+                async with remote_session() as db:
+                    await AdminRepo.create_history_entry(
+                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                        reason="EMAIL_SENT_SYSTEM"
+                    )
+                structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="system", key_id=key_id)
             else:
                 error_msg = res.get("reason", "Unknown API error")
-                await AdminRepo.create_history_entry(
-                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                    reason="EMAIL_FAILED_SYSTEM"
-                )
-                structured_log(logger, logging.ERROR, "notification_failure_system", channel="email", target=email, error_message=error_msg)
+                async with remote_session() as db:
+                    await AdminRepo.create_history_entry(
+                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                        reason="EMAIL_FAILED_SYSTEM"
+                    )
+                structured_log(logger, logging.ERROR, "notification_failure_system", channel="email", target=email, error_message=error_msg, key_id=key_id)
                 raise Exception(f"Email failure: {error_msg}")
 
     @staticmethod
     async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: str = None):
         structured_log(logger, logging.INFO, "notification_initiated", channel="whatsapp", target=phone)
         
-        result = await whatsapp_service.send_license_whatsapp(phone, key_data, app_name, sender_channel=sender_channel)
+        # 1. Resolve channel from Key if not provided (with caching)
+        resolved_channel = sender_channel
+        key_id = key_data.get("id")
+        
+        if not resolved_channel and key_id:
+            key = await NotificationService._get_hydrated_key_config(key_id)
+            if key:
+                resolved_channel = key.whatsapp_sender_channel
+
+        # 2. Execute
+        result = await whatsapp_service.send_license_whatsapp(phone, key_data, app_name, sender_channel=resolved_channel)
         
         if result.get("status") == "failed":
             error_msg = result.get("message", "Unknown API error")
-            structured_log(logger, logging.ERROR, "notification_failure", channel="whatsapp", target=phone, error_message=error_msg)
+            structured_log(logger, logging.ERROR, "notification_failure", channel="whatsapp", target=phone, error_message=error_msg, key_id=key_id)
             raise Exception(f"WhatsApp failure: {error_msg}")
             
-        structured_log(logger, logging.INFO, "notification_completed", channel="whatsapp", target=phone, result=result)
+        structured_log(logger, logging.INFO, "notification_completed", 
+                       channel="whatsapp", target=phone, result=result, 
+                       channel_used=resolved_channel, key_id=key_id)

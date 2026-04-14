@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'react-router-dom'
 import { 
   Plus, Copy, Check, Trash2, KeyRound, Loader2, Filter, 
-  Clock, RefreshCw, Layers, X, Calendar
+  Clock, RefreshCw, Layers, X, Calendar, Settings, ShieldCheck
 } from 'lucide-react'
 import api from '../services/api'
 import { format } from 'date-fns'
@@ -26,17 +26,28 @@ interface Key {
   address?: string; labels?: CustomLabel[]
   bill_header_1?: string; bill_header_2?: string; bill_header_3?: string; bill_footer?: string
   logo_url?: string; signup_image_url?: string
+
+  // Communication Settings
+  smtp_enabled: boolean;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  from_email?: string;
+  from_name?: string;
+  smtp_status: 'VALID' | 'INVALID' | 'UNTESTED';
+  whatsapp_sender_channel?: string;
 }
 
 // --- Sub-components ---
 
-const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, copiedId }: {
+const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, onSettings, copiedId }: {
   item: Key;
   appName: string;
   onCopy: (text: string, id: string) => void;
   onExtend: (id: string, expiry: string) => void;
   onRevoke: (id: string) => void;
   onRotate: (id: string) => void;
+  onSettings: (item: Key) => void;
   copiedId: string | null;
 }) => {
   return (
@@ -89,6 +100,10 @@ const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, copi
           <button onClick={() => onExtend(item.id, item.expiry_date)}
             className="text-[11px] font-medium text-brand-600 hover:text-brand-700 hover:underline flex items-center gap-1">
             <Clock className="w-3 h-3" /> Extend
+          </button>
+          <button onClick={() => onSettings(item)}
+            className="text-[11px] font-medium text-surface-500 hover:text-brand-600 hover:underline flex items-center gap-1">
+            <Settings className="w-3 h-3" /> Settings
           </button>
           {item.status !== 'REVOKED' && (
             <button onClick={() => {
@@ -225,8 +240,19 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     bill_header_1: '', bill_header_2: '', bill_header_3: '', bill_footer: '',
     logo_url: '', signup_image_url: '',
     notification_type: 'both' as 'whatsapp' | 'email' | 'both',
+    
+    // Communication Settings
+    smtp_enabled: false,
+    smtp_host: 'smtp.gmail.com',
+    smtp_port: 587,
+    smtp_user: '',
+    smtp_password: '',
+    from_email: '',
+    from_name: '',
+    whatsapp_sender_channel: ''
   }
   const [form, setForm] = useState(initialForm)
+
 
   const isDuplicate = useMemo(() => {
     if (!lastSubmitted) return false;
@@ -240,14 +266,21 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   }, [form.app_id, form.company_name, form.email, form.whatsapp_number, lastSubmitted]);
 
   const handleSubmit = async (e: FormEvent) => {
+
     e.preventDefault()
     if (!form.app_id) { toast.error('You have to first select the application.'); return }
     setSaving(true)
     try {
-      const payload = { ...form, expiry_date: new Date(form.expiry_date).toISOString() }
+      const payload = { 
+        ...form, 
+        expiry_date: new Date(form.expiry_date).toISOString() 
+      }
+      
+      // Don't send empty password
+      if (!payload.smtp_password) delete (payload as any).smtp_password
+
       const { data } = await api.post('/apps/keys', payload)
       
-      // Store successful submission data for duplicate prevention
       setLastSubmitted(JSON.stringify({
         app_id: form.app_id,
         company: form.company_name,
@@ -258,6 +291,7 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
       onSuccess(data.map((d: any) => d.raw_activation_key))
       toast.success(`Successfully generated ${form.count} activation key(s)!`)
       onClose()
+      setForm(initialForm) // Reset
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Generation failed')
     } finally {
@@ -416,25 +450,92 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                     />
                   </div>
                   <div><label className="form-label">Key Count</label><input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" /></div>
-                  <div className="col-span-2">
-                    <label className="form-label">Notification Channel</label>
-                    <div className="flex gap-2">
-                      {['both', 'whatsapp', 'email'].map((type) => (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setForm({ ...form, notification_type: type as any })}
-                          className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold capitalize transition-all border ${
-                            form.notification_type === type 
-                              ? 'bg-brand-600 border-brand-600 text-white shadow-lg shadow-brand-200' 
-                              : 'bg-white border-surface-200 text-surface-600 hover:border-brand-200'
-                          }`}
-                        >
-                          {type}
-                        </button>
-                      ))}
+                </div>
+              </div>
+
+              {/* --- Communication & SMTP Settings --- */}
+              <div className="space-y-4 pt-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-surface-400 uppercase tracking-widest pl-1">Communication Infrastructure</p>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" checked={form.smtp_enabled}
+                      onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })}
+                      className="sr-only peer" />
+                    <div className="w-8 h-4 bg-surface-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
+                    <span className="ml-2 text-[10px] font-bold text-surface-500 uppercase">Custom SMTP</span>
+                  </label>
+                </div>
+
+                <div className="space-y-4 bg-surface-50 p-4 rounded-2xl border border-surface-200">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                        <label className="form-label">WhatsApp Sender Channel *</label>
+                        <input 
+                          value={form.whatsapp_sender_channel} 
+                          onChange={(e) => setForm({...form, whatsapp_sender_channel: e.target.value})}
+                          placeholder="e.g. 919893224689:5" 
+                          className="form-input" 
+                        />
+                        <p className="text-[9px] text-surface-400 mt-1 italic leading-tight">Format: CountryCode-Number:Channel-ID</p>
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="form-label">Notification Channels to Enable</label>
+                      <div className="flex gap-2">
+                        {['both', 'whatsapp', 'email'].map((type) => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => setForm({ ...form, notification_type: type as any })}
+                            className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-bold capitalize transition-all border ${
+                              form.notification_type === type 
+                                ? 'bg-brand-600 border-brand-600 text-white' 
+                                : 'bg-white border-surface-200 text-surface-600'
+                            }`}
+                          >
+                            {type}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
+
+                  {form.smtp_enabled && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="pt-4 border-t border-surface-200 mt-4 space-y-4 overflow-hidden">
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP Host</label>
+                          <input value={form.smtp_host} onChange={(e) => setForm({...form, smtp_host: e.target.value})} placeholder="smtp.gmail.com" className="form-input text-sm py-1.5" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Port</label>
+                          <input type="number" value={form.smtp_port} onChange={(e) => setForm({...form, smtp_port: parseInt(e.target.value)})} className="form-input text-sm py-1.5" />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">User / Email</label>
+                          <input value={form.smtp_user} onChange={(e) => setForm({...form, smtp_user: e.target.value})} placeholder="user@domain.com" className="form-input text-sm py-1.5" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Password</label>
+                          <input type="password" value={form.smtp_password} onChange={(e) => setForm({...form, smtp_password: e.target.value})} placeholder="••••••••" className="form-input text-sm py-1.5" />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Sender Email</label>
+                          <input value={form.from_email} onChange={(e) => setForm({...form, from_email: e.target.value})} placeholder="noreply@domain.com" className="form-input text-sm py-1.5" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Sender Name</label>
+                          <input value={form.from_name} onChange={(e) => setForm({...form, from_name: e.target.value})} placeholder="Billing Dept" className="form-input text-sm py-1.5" />
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
                 </div>
               </div>
               <div className="pt-4 flex gap-3 sticky bottom-0 backdrop-blur-sm pb-2">
@@ -478,6 +579,162 @@ const ExtendKeyModal = memo(({ keyId, currentExpiry, onClose, onConfirm }: {
   )
 })
 
+const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
+  isOpen: boolean;
+  onClose: () => void;
+  keyItem: Key | null;
+  onSuccess: () => void;
+}) => {
+  const toast = useToast()
+  const [saving, setSaving] = useState(false)
+  const [testingSmtp, setTestingSmtp] = useState(false)
+  const [form, setForm] = useState<any>(null)
+
+  useEffect(() => {
+    if (isOpen && keyItem) {
+      setForm({
+        smtp_enabled: keyItem.smtp_enabled,
+        smtp_host: keyItem.smtp_host || 'smtp.gmail.com',
+        smtp_port: keyItem.smtp_port || 587,
+        smtp_user: keyItem.smtp_user || '',
+        smtp_password: '', // Never fill existing password
+        from_email: keyItem.from_email || '',
+        from_name: keyItem.from_name || '',
+        whatsapp_sender_channel: keyItem.whatsapp_sender_channel || '',
+        notification_type: 'both' // Default fallback
+      })
+    }
+  }, [isOpen, keyItem])
+
+  const handleTestSmtp = async () => {
+    if (!keyItem) return
+    setTestingSmtp(true)
+    try {
+      const { data } = await api.post(`/keys/${keyItem.id}/test-smtp`)
+      if (data.status === 'success') {
+        toast.success("SMTP Configuration is VALID!")
+      } else {
+        toast.error(data.reason || "SMTP connection failed.")
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Test failed.")
+    } finally {
+      setTestingSmtp(false)
+    }
+  }
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!keyItem) return
+    setSaving(true)
+    try {
+      const payload = { ...form }
+      if (!payload.smtp_password) delete payload.smtp_password
+      
+      await api.patch(`/apps/keys/${keyItem.id}`, payload)
+      toast.success("Settings updated successfully!")
+      onSuccess()
+      onClose()
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Update failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!form) return null
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 z-40 bg-black/30" />
+          <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} className="fixed inset-y-0 right-0 z-50 w-full max-w-md glass border-l border-white/20 flex flex-col">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-white/30">
+              <h2 className="text-lg font-bold text-surface-900">Communication Settings</h2>
+              <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-500"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+               <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-surface-400 uppercase tracking-widest">WhatsApp Config</p>
+                  </div>
+                  <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-3">
+                      <label className="form-label">Sender Channel</label>
+                      <input 
+                        value={form.whatsapp_sender_channel} 
+                        onChange={(e) => setForm({...form, whatsapp_sender_channel: e.target.value})}
+                        placeholder="919893224689:5" 
+                        className="form-input" 
+                      />
+                  </div>
+               </div>
+
+               <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-surface-400 uppercase tracking-widest font-bold">Email (SMTP) Config</p>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" checked={form.smtp_enabled}
+                        onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })}
+                        className="sr-only peer" />
+                      <div className="w-8 h-4 bg-surface-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:bg-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
+                    </label>
+                  </div>
+
+                  {form.smtp_enabled && (
+                    <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-4">
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP Host</label>
+                            <input value={form.smtp_host} onChange={(e) => setForm({...form, smtp_host: e.target.value})} className="form-input text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">Port</label>
+                            <input type="number" value={form.smtp_port} onChange={(e) => setForm({...form, smtp_port: parseInt(e.target.value)})} className="form-input text-sm" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">User</label>
+                            <input value={form.smtp_user} onChange={(e) => setForm({...form, smtp_user: e.target.value})} className="form-input text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">Password</label>
+                            <input type="password" value={form.smtp_password} onChange={(e) => setForm({...form, smtp_password: e.target.value})} placeholder="••••••••" className="form-input text-sm" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">From Email</label>
+                            <input value={form.from_email} onChange={(e) => setForm({...form, from_email: e.target.value})} className="form-input text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-400 uppercase">From Name</label>
+                            <input value={form.from_name} onChange={(e) => setForm({...form, from_name: e.target.value})} className="form-input text-sm" />
+                          </div>
+                        </div>
+                        <button type="button" onClick={handleTestSmtp} disabled={testingSmtp} className="btn-secondary w-full justify-center text-xs py-2">
+                           {testingSmtp ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                           {testingSmtp ? 'Testing...' : 'Test SMTP Connection'}
+                        </button>
+                    </div>
+                  )}
+               </div>
+
+              <div className="pt-6 flex gap-3 sticky bottom-0 bg-white/50 backdrop-blur-md">
+                <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+                <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save Settings'}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  )
+})
+
 // --- Main Page ---
 
 export default function KeyManager() {
@@ -489,6 +746,7 @@ export default function KeyManager() {
   const [showCreate, setShowCreate] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [extendKey, setExtendKey] = useState<{ id: string, expiry: string } | null>(null)
+  const [settingsKey, setSettingsKey] = useState<Key | null>(null)
   const [generatedRawKeys, setGeneratedRawKeys] = useState<string[]>([])
   const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
   const [dateRange, setDateRange] = useState({ start: '', end: '' })
@@ -585,6 +843,7 @@ export default function KeyManager() {
       <GeneratedKeysModal keys={generatedRawKeys} onCopy={copyToClipboard} copiedId={copiedId} onClose={() => setGeneratedRawKeys([])} />
       <CreateKeyDrawer isOpen={showCreate} onClose={() => setShowCreate(false)} apps={apps} onSuccess={(keys) => { setGeneratedRawKeys(keys); fetchAllKeys(); }} />
       <ExtendKeyModal keyId={extendKey?.id || null} currentExpiry={extendKey?.expiry || ''} onClose={() => setExtendKey(null)} onConfirm={handleUpdateExpiry} />
+      <KeySettingsDrawer isOpen={!!settingsKey} keyItem={settingsKey} onClose={() => setSettingsKey(null)} onSuccess={fetchAllKeys} />
 
       <div className="flex flex-wrap items-center gap-4 glass p-4 rounded-xl border border-white/50">
         <div className="flex items-center gap-2">
@@ -652,6 +911,7 @@ export default function KeyManager() {
                   onExtend={(id, expiry) => setExtendKey({ id, expiry })}
                   onRevoke={handleRevoke}
                   onRotate={handleRotateToken}
+                  onSettings={(item) => setSettingsKey(item)}
                   copiedId={copiedId}
                 />
               ))}

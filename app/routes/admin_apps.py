@@ -202,17 +202,17 @@ async def update_key_details(
     return await AdminAppService.update_key(db, key_uuid, update_in, admin_id=current_admin.id)
 
 
-@router.post("/{app_id}/test-smtp")
-async def test_app_smtp(
-    app_id: uuid.UUID,
+@router.post("/keys/{key_id}/test-smtp")
+async def test_key_smtp(
+    key_id: uuid.UUID,
     db: AsyncSession = Depends(get_remote_db),
     current_admin: AdminUser = Depends(get_current_admin)
 ):
     """
-    Attempts to send a test email using the App's configured SMTP.
+    Attempts to send a test email using the ActivationKey's configured SMTP.
     Updates smtp_status to VALID or INVALID based on result.
     """
-    return await AdminAppService.test_smtp(db, app_id)
+    return await AdminAppService.test_smtp(db, key_id)
 
 
 @router.delete("/keys/{key_uuid}/revoke")

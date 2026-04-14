@@ -51,18 +51,7 @@ class AdminAppService:
                 db, 
                 app_id=app_in.app_id if hasattr(app_in, 'app_id') else f"WB-APP-{uuid.uuid4().hex[:6].upper()}", 
                 app_name=app_in.app_name, 
-                description=app_in.description,
-                whatsapp_sender_channel=app_in.whatsapp_sender_channel,
-                email_sender=app_in.email_sender,
-                
-                # New SMTP fields
-                smtp_enabled=app_in.smtp_enabled,
-                smtp_host=app_in.smtp_host,
-                smtp_port=app_in.smtp_port,
-                smtp_user=app_in.smtp_user,
-                smtp_password=encrypt_password(app_in.smtp_password) if app_in.smtp_password else None,
-                from_email=app_in.from_email,
-                from_name=app_in.from_name
+                description=app_in.description
             )
         except IntegrityError:
             await db.rollback()
@@ -98,42 +87,44 @@ class AdminAppService:
         return await AdminRepo.update_app(db, db_app, update_data)
 
     @staticmethod
-    async def test_smtp(db: AsyncSession, app_id: uuid.UUID) -> dict:
+    async def test_smtp(db: AsyncSession, key_id: uuid.UUID) -> dict:
         from app.services.email_provider import SMTPProvider
         from app.core.security import decrypt_password
         
-        app = await AdminRepo.get_app_by_uuid(db, app_id)
-        if not app:
-            raise HTTPException(status_code=404, detail="App not found")
+        key = await AdminRepo.get_key_by_uuid(db, key_id)
+        if not key:
+            raise HTTPException(status_code=404, detail="Activation key not found")
         
-        if not app.smtp_user or not app.smtp_password:
+        if not key.smtp_user or not key.smtp_password:
             raise HTTPException(status_code=400, detail="SMTP User and Password must be configured before testing.")
         
         try:
             # 1. Initialize Provider
-            decrypted_pass = decrypt_password(app.smtp_password)
+            decrypted_pass = decrypt_password(key.smtp_password)
             provider = SMTPProvider(
-                host=app.smtp_host,
-                port=app.smtp_port,
-                user=app.smtp_user,
+                host=key.smtp_host,
+                port=key.smtp_port,
+                user=key.smtp_user,
                 password=decrypted_pass
             )
             
             # 2. Attempt Test Send
-            test_subject = f"SMTP Verification: {app.app_name}"
-            test_body = f"Hello,\n\nThis is a test email to verify your SMTP configuration for {app.app_name}.\n\nIf you received this, your settings are VALID."
+            test_subject = f"SMTP Verification: {key.company_name}"
+            test_body = f"Hello,\n\nThis is a test email to verify your SMTP configuration for {key.company_name}.\n\nIf you received this, your settings are VALID."
             
             res = await provider.send_email(
-                to_email=app.smtp_user, # Test send to self
+                to_email=key.smtp_user, # Test send to self
                 subject=test_subject,
                 body=test_body,
-                from_email=app.from_email or app.smtp_user,
-                from_name=app.from_name or "SMTP Tester"
+                from_email=key.from_email or key.smtp_user,
+                from_name=key.from_name or "SMTP Tester"
             )
             
             # 3. Update Status
             new_status = "VALID" if res["status"] == "success" else "INVALID"
-            await AdminRepo.update_app(db, app, {"smtp_status": new_status})
+            await AdminRepo.update_key(db, key)
+            key.smtp_status = new_status
+            await db.commit()
             
             if res["status"] == "success":
                 return {"status": "success", "message": "SMTP configuration verified successfully."}
@@ -141,8 +132,9 @@ class AdminAppService:
                 return {"status": "failed", "reason": res.get("reason", "Unknown failure")}
                 
         except Exception as e:
-            logger.error(f"SMTP Test Error for App {app_id}: {e}")
-            await AdminRepo.update_app(db, app, {"smtp_status": "INVALID"})
+            logger.error(f"SMTP Test Error for Key {key_id}: {e}")
+            key.smtp_status = "INVALID"
+            await db.commit()
             return {"status": "failed", "reason": str(e)}
 
     # ─────────────────────────────────────────
@@ -205,6 +197,17 @@ class AdminAppService:
                     bill_header_1=key_in.bill_header_1,
                     bill_header_3=key_in.bill_header_3,
                     bill_footer=key_in.bill_footer,
+                    
+                    # Communication Settings
+                    smtp_enabled=key_in.smtp_enabled,
+                    smtp_host=key_in.smtp_host,
+                    smtp_port=key_in.smtp_port,
+                    smtp_user=key_in.smtp_user,
+                    smtp_password=encrypt_password(key_in.smtp_password) if key_in.smtp_password else None,
+                    from_email=key_in.from_email,
+                    from_name=key_in.from_name,
+                    whatsapp_sender_channel=key_in.whatsapp_sender_channel,
+                    email_sender=key_in.email_sender
                 )
 
                 # Create audit history for generation

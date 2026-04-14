@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type FormEvent, useCallback, memo, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, AppWindow, X, Loader2, ChevronRight, Trash2, Filter, Calendar, KeyRound, RefreshCw, Mail, ShieldCheck, AlertCircle, Info } from 'lucide-react'
+import { Plus, AppWindow, X, Loader2, ChevronRight, Trash2, Filter, Calendar, KeyRound, RefreshCw } from 'lucide-react'
 import api from '../services/api'
 import { format, isWithinInterval, startOfDay, endOfDay } from 'date-fns'
 import { useToast } from '../context/ToastContext'
@@ -13,15 +13,6 @@ interface App {
   description?: string
   created_at: string
   keys_count: number
-  
-  // SMTP Fields
-  smtp_enabled: boolean
-  smtp_host?: string
-  smtp_port?: number
-  smtp_user?: string
-  from_email?: string
-  from_name?: string
-  smtp_status: 'VALID' | 'INVALID' | 'UNTESTED'
 }
 
 const COLORS = [
@@ -121,17 +112,8 @@ const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: {
   const toast = useToast()
   const [form, setForm] = useState({ 
     app_name: '', 
-    description: '',
-    smtp_enabled: false,
-    smtp_host: 'smtp.gmail.com',
-    smtp_port: 587,
-    smtp_user: '',
-    smtp_password: '',
-    from_email: '',
-    from_name: ''
+    description: ''
   })
-  const [testingSmtp, setTestingSmtp] = useState(false)
-  const [smtpStatus, setSmtpStatus] = useState<'VALID' | 'INVALID' | 'UNTESTED'>('UNTESTED')
   const [saving, setSaving] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
@@ -140,42 +122,19 @@ const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: {
       if (initialData) {
         setForm({
           app_name: initialData.app_name,
-          description: initialData.description || '',
-          smtp_enabled: initialData.smtp_enabled || false,
-          smtp_host: initialData.smtp_host || 'smtp.gmail.com',
-          smtp_port: initialData.smtp_port || 587,
-          smtp_user: initialData.smtp_user || '',
-          smtp_password: '', // Password is write-only
-          from_email: initialData.from_email || '',
-          from_name: initialData.from_name || ''
+          description: initialData.description || ''
         })
-        setSmtpStatus(initialData.smtp_status)
       } else {
         setForm({
           app_name: '',
-          description: '',
-          smtp_enabled: false,
-          smtp_host: 'smtp.gmail.com',
-          smtp_port: 587,
-          smtp_user: '',
-          smtp_password: '',
-          from_email: '',
-          from_name: ''
+          description: ''
         })
-        setSmtpStatus('UNTESTED')
       }
       setTimeout(() => nameRef.current?.focus(), 100)
     } else {
       setForm({
         app_name: '',
-        description: '',
-        smtp_enabled: false,
-        smtp_host: 'smtp.gmail.com',
-        smtp_port: 587,
-        smtp_user: '',
-        smtp_password: '',
-        from_email: '',
-        from_name: ''
+        description: ''
       })
     }
   }, [isOpen, initialData])
@@ -184,15 +143,11 @@ const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: {
     e.preventDefault()
     setSaving(true)
     try {
-      // Create a clean payload (don't send empty password strings if not changing)
-      const payload: any = { ...form }
-      if (!payload.smtp_password) delete payload.smtp_password
-
       if (initialData) {
-        await api.patch(`/apps/${initialData.id}`, payload)
+        await api.patch(`/apps/${initialData.id}`, form)
         toast.success(`Application "${form.app_name}" updated!`)
       } else {
-        await api.post('/apps', payload)
+        await api.post('/apps', form)
         toast.success(`Application "${form.app_name}" created!`)
       }
       onSuccess()
@@ -201,29 +156,6 @@ const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: {
       toast.error(err.response?.data?.detail || 'Operation failed.')
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleTestSmtp = async () => {
-    if (!initialData) {
-        toast.warning("Please save the application first before testing SMTP.")
-        return
-    }
-    setTestingSmtp(true)
-    try {
-        const { data } = await api.post(`/apps/${initialData.id}/test-smtp`)
-        if (data.status === 'success') {
-            toast.success("SMTP Configuration is VALID!")
-            setSmtpStatus('VALID')
-        } else {
-            toast.error(data.reason || "SMTP connection failed.")
-            setSmtpStatus('INVALID')
-        }
-    } catch (err: any) {
-        toast.error(err.response?.data?.detail || "Test failed. Ensure configuration is saved.")
-        setSmtpStatus('INVALID')
-    } finally {
-        setTestingSmtp(false)
     }
   }
 
@@ -267,97 +199,7 @@ const AppDrawer = memo(({ isOpen, onClose, onSuccess, initialData }: {
                   placeholder="Optional short description…"
                   className="form-input resize-none" />
               </div>
-
-              {/* --- SMTP Configuration Section --- */}
-              <div className="pt-4 border-t border-white/20">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                        <Mail className="w-4 h-4 text-brand-600" />
-                        <h3 className="text-sm font-bold text-surface-900">SMTP Settings</h3>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" checked={form.smtp_enabled}
-                            onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })}
-                            className="sr-only peer" />
-                        <div className="w-9 h-5 bg-surface-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-600"></div>
-                        <span className="ml-2 text-xs font-medium text-surface-600">{form.smtp_enabled ? 'Enabled' : 'Disabled'}</span>
-                    </label>
-                </div>
-
-                {form.smtp_enabled && (
-                    <motion.div 
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="space-y-3 bg-brand-50/50 p-4 rounded-xl border border-brand-100"
-                    >
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] uppercase tracking-wider font-bold text-brand-600 flex items-center gap-1">
-                                {smtpStatus === 'VALID' && <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />}
-                                {smtpStatus === 'INVALID' && <AlertCircle className="w-3.5 h-3.5 text-red-500" />}
-                                {smtpStatus === 'UNTESTED' && <Info className="w-3.5 h-3.5 text-surface-400" />}
-                                Status: <span className={
-                                    smtpStatus === 'VALID' ? 'text-emerald-600' :
-                                    smtpStatus === 'INVALID' ? 'text-red-600' : 'text-surface-500'
-                                }>{smtpStatus}</span>
-                            </span>
-                            {initialData && (
-                                <button
-                                    type="button"
-                                    onClick={handleTestSmtp}
-                                    disabled={testingSmtp}
-                                    className="text-[10px] font-bold bg-white px-2 py-1 rounded-lg border border-brand-200 text-brand-600 hover:bg-brand-600 hover:text-white transition-colors flex items-center gap-1"
-                                >
-                                    {testingSmtp ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
-                                    Test SMTP
-                                </button>
-                            )}
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-3">
-                            <div className="col-span-2">
-                                <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP Host</label>
-                                <input value={form.smtp_host} onChange={(e) => setForm({...form, smtp_host: e.target.value})}
-                                    placeholder="smtp.gmail.com" className="form-input text-xs py-1.5" />
-                            </div>
-                            <div>
-                                <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Port</label>
-                                <input type="number" value={form.smtp_port} onChange={(e) => setForm({...form, smtp_port: parseInt(e.target.value)})}
-                                    placeholder="587" className="form-input text-xs py-1.5" />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP User / Email</label>
-                            <input value={form.smtp_user} onChange={(e) => setForm({...form, smtp_user: e.target.value})}
-                                placeholder="user@gmail.com" className="form-input text-xs py-1.5" />
-                        </div>
-
-                        <div>
-                            <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Password</label>
-                            <input type="password" value={form.smtp_password} onChange={(e) => setForm({...form, smtp_password: e.target.value})}
-                                placeholder={initialData ? "••••••••" : "SMTP Password"} className="form-input text-xs py-1.5" />
-                            <p className="text-[9px] text-surface-400 mt-1 italic leading-tight">
-                                {initialData ? "Leave blank to keep existing password." : "Password will be encrypted at rest."}
-                            </p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3 pt-1">
-                            <div>
-                                <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Sender Email</label>
-                                <input value={form.from_email} onChange={(e) => setForm({...form, from_email: e.target.value})}
-                                    placeholder="support@company.com" className="form-input text-xs py-1.5" />
-                            </div>
-                            <div>
-                                <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Sender Name</label>
-                                <input value={form.from_name} onChange={(e) => setForm({...form, from_name: e.target.value})}
-                                    placeholder="Company Name" className="form-input text-xs py-1.5" />
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-              </div>
-
-              <div className="pt-4 flex gap-3">
+              <div className="pt-4 flex gap-3 border-t border-white/20">
                 <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary flex-1">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : (initialData ? <RefreshCw className="w-4 h-4" /> : <Plus className="w-4 h-4" />)}

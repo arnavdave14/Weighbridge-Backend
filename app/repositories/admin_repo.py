@@ -23,8 +23,8 @@ class AdminRepo:
     # ─────────────────────────────────────────
 
     @staticmethod
-    async def create_app(db: AsyncSession, **kwargs) -> App:
-        db_app = App(**kwargs)
+    async def create_app(db: AsyncSession, app_id: str, app_name: str, description: Optional[str] = None) -> App:
+        db_app = App(app_id=app_id, app_name=app_name, description=description)
         db.add(db_app)
         await db.commit()
         await db.refresh(db_app)

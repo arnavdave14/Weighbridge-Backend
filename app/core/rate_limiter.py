@@ -11,6 +11,23 @@ class RateLimiter:
     def __init__(self):
         # We reuse the REDIS_URL from settings
         self.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        self._connected = None # Lazy check
+
+    def ping(self) -> bool:
+        """Verifies Redis connection status."""
+        try:
+            self.redis_client.ping()
+            self._connected = True
+            return True
+        except redis.RedisError:
+            self._connected = False
+            return False
+
+    @property
+    def is_connected(self) -> bool:
+        if self._connected is None:
+            self.ping()
+        return self._connected
 
     def check(self, key: str, limit: int, window_seconds: int = 60) -> tuple[bool, int]:
         """Legacy single check."""
@@ -23,6 +40,10 @@ class RateLimiter:
         checks: list of (key, limit, window_seconds)
         Returns: (overall_allowed, list of (is_allowed, remaining))
         """
+        if not self.is_connected:
+            # Fail-open if Redis is down
+            return True, [(True, -1)] * len(checks)
+
         try:
             pipe = self.redis_client.pipeline()
             for key, _, window in checks:
@@ -46,7 +67,7 @@ class RateLimiter:
             return overall_allowed, check_results
             
         except redis.RedisError:
-            # Fallback to allow
+            self._connected = False # Mark as disconnected to trigger fail-open next time
             return True, [(True, -1)] * len(checks)
 
 rate_limiter = RateLimiter()
