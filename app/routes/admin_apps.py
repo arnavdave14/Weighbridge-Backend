@@ -215,6 +215,19 @@ async def test_key_smtp(
     return await AdminAppService.test_smtp(db, key_id)
 
 
+@router.post("/keys/{key_id}/test-whatsapp")
+async def test_key_whatsapp(
+    key_id: uuid.UUID,
+    db: AsyncSession = Depends(get_remote_db),
+    current_admin: AdminUser = Depends(get_current_admin)
+):
+    """
+    Attempts to send a test WhatsApp message using the ActivationKey's configured channel.
+    Sends the test message to the company's mobile_number.
+    """
+    return await AdminAppService.test_whatsapp(db, key_id)
+
+
 @router.delete("/keys/{key_uuid}/revoke")
 async def revoke_key(
     key_uuid: uuid.UUID,

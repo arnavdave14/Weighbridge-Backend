@@ -137,6 +137,47 @@ class AdminAppService:
             await db.commit()
             return {"status": "failed", "reason": str(e)}
 
+    @staticmethod
+    async def test_whatsapp(db: AsyncSession, key_id: uuid.UUID) -> dict:
+        """
+        Attempts to send a test WhatsApp message using the ActivationKey's configured channel.
+        Sends the test message to the company's own mobile_number.
+        """
+        from app.services.notification_service import NotificationService
+        
+        key = await AdminRepo.get_key_by_uuid(db, key_id)
+        if not key:
+            raise HTTPException(status_code=404, detail="Activation key not found")
+        
+        if not key.whatsapp_sender_channel:
+            raise HTTPException(status_code=400, detail="WhatsApp Sender Channel must be configured before testing.")
+            
+        if not key.mobile_number:
+            raise HTTPException(status_code=400, detail="Company Mobile Number must be configured to receive the test message.")
+            
+        try:
+            test_data = {
+                "id": str(key.id),
+                "company_name": key.company_name,
+                "raw_activation_key": "WB-TEST-XXXX-XXXX"
+            }
+            
+            res = await NotificationService._send_whatsapp_safe(
+                phone=key.mobile_number,
+                key_data=test_data,
+                app_name="System Verification",
+                sender_channel=key.whatsapp_sender_channel
+            )
+            
+            if res in ["success", "sent"]:
+                return {"status": "success", "message": "WhatsApp sender verified successfully."}
+            else:
+                return {"status": "failed", "reason": res}
+                
+        except Exception as e:
+            logger.error(f"WhatsApp Test Error for Key {key_id}: {e}")
+            return {"status": "failed", "reason": str(e)}
+
     # ─────────────────────────────────────────
     # ActivationKey (Company License) Operations
     # ─────────────────────────────────────────
@@ -163,20 +204,17 @@ class AdminAppService:
             try:
                 # --- Step 1: Pre-generation Uniqueness Check ---
                 # Check for existing ACTIVE or EXPIRING_SOON licenses for this exact combination
-                # We do this twice: once manually for clean feedback, and once via DB constraint
                 existing_check = await db.execute(
                     select(ActivationKey).where(
                         ActivationKey.app_id == key_in.app_id,
                         ActivationKey.company_name == key_in.company_name,
-                        ActivationKey.email == key_in.email,
-                        ActivationKey.whatsapp_number == key_in.whatsapp_number,
                         ActivationKey.status.in_(["ACTIVE", "EXPIRING_SOON"])
                     )
                 )
                 if existing_check.scalars().first():
                     raise HTTPException(
                         status_code=400, 
-                        detail=f"An active license already exists for '{key_in.company_name}' with these contact details."
+                        detail=f"An active license already exists for '{key_in.company_name}' for this application."
                     )
 
                 db_key = await AdminRepo.create_activation_key(
@@ -195,6 +233,7 @@ class AdminAppService:
                     whatsapp_number=key_in.whatsapp_number,
                     labels=[label.model_dump() for label in key_in.labels] if key_in.labels else [],
                     bill_header_1=key_in.bill_header_1,
+                    bill_header_2=key_in.bill_header_2,
                     bill_header_3=key_in.bill_header_3,
                     bill_footer=key_in.bill_footer,
                     
@@ -283,6 +322,8 @@ class AdminAppService:
             db.add(new_schema_version)
 
         for field, value in update_data.items():
+            if field == "smtp_password" and value:
+                value = encrypt_password(value)
             setattr(key, field, value)
 
         # Atomic Status Recalculation if expiry changes

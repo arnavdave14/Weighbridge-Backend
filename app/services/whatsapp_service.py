@@ -158,8 +158,7 @@ async def send_whatsapp_message(receipt_id: int, phone: str, **kwargs) -> Dict[s
         logger.error(f"[RT-{receipt_id}] Message missing from frontend")
         return {}
     
-    await send_whatsapp(phone=phone, receipt_id=receipt_id, message=msg)
-    return {}
+    return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=msg)
 
 async def send_whatsapp_pdf(phone: str, pdf_content: bytes, filename: str, receipt_id: int = 0, caption: Optional[str] = None) -> Dict[str, Any]:
     return await send_whatsapp(phone=phone, receipt_id=receipt_id, message=caption, pdf_content=pdf_content, filename=filename)
@@ -173,5 +172,4 @@ async def send_license_whatsapp(phone: str, key_data: Dict[str, Any], app_name: 
         logger.error(f"License WhatsApp skipped: No message content provided.")
         return {}
 
-    await send_whatsapp(phone=phone, message=msg, sender_channel=sender_channel)
-    return {}
+    return await send_whatsapp(phone=phone, message=msg, sender_channel=sender_channel)

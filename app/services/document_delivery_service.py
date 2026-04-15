@@ -31,7 +31,7 @@ class DocumentDeliveryService:
         company_name = "Unknown"
         whatsapp_sender_channel = None
         email_sender_name = None
-        provider_type = "system" # Default fallback
+        provider_type = "none" # Default until matched
         delivery_channel = "none"
 
         if target_email and target_whatsapp: delivery_channel = "both"
@@ -131,10 +131,18 @@ class DocumentDeliveryService:
                 skip_channels=skip_channels
             )
             
-            # evaluate overall success
+            # evaluate overall success: SUCCESS if all active channels succeeded
+            # If any active channel failed -> FAILED
+            # If all were skipped -> SKIPPED
             if len(delivery_res["failed"]) > 0:
                 final_status = "FAILED"
                 error_msg = str(delivery_res["failed"])
+            elif len(delivery_res["success"]) == 0 and len(delivery_res["skipped"]) > 0:
+                final_status = "SKIPPED"
+                error_msg = "No tenant configuration available for requested channels."
+            elif len(delivery_res["success"]) == 0:
+                # Should not happen if a channel was requested and not skipped by input
+                final_status = "SKIPPED"
         except Exception as e:
             final_status = "FAILED"
             error_msg = str(e)

@@ -113,9 +113,9 @@ class NotificationService:
                     key = await AdminRepo.get_key_by_uuid(db, uuid.UUID(key_id))
                     if key: sender_channel = key.whatsapp_sender_channel
 
-            await NotificationService._send_whatsapp_safe(phone, key_data, app_name, sender_channel=sender_channel)
-            metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="sent").inc()
-            return "sent"
+            status = await NotificationService._send_whatsapp_safe(phone, key_data, app_name, sender_channel=sender_channel)
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status=status).inc()
+            return status
         except Exception as e:
             metrics.NOTIFICATIONS_TOTAL.labels(channel="whatsapp", status="failed").inc()
             raise e
@@ -144,9 +144,9 @@ class NotificationService:
                     key = await AdminRepo.get_key_by_uuid(db, uuid.UUID(key_id))
                     if key: sender_name = key.email_sender
 
-            await NotificationService._send_email_safe(email, key_data, app_name, sender_name=sender_name)
-            metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="sent").inc()
-            return "sent"
+            status = await NotificationService._send_email_safe(email, key_data, app_name, sender_name=sender_name)
+            metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status=status).inc()
+            return status
         except Exception as e:
             metrics.NOTIFICATIONS_TOTAL.labels(channel="email", status="failed").inc()
             raise e
@@ -318,14 +318,19 @@ class NotificationService:
             # 3. Execution (Sequential inside worker is fine)
             start_time = time.time()
             try:
+                status = "sent"
                 if channel == "whatsapp":
-                    await NotificationService._send_whatsapp_safe(target, key_data, app_name)
+                    status = await NotificationService._send_whatsapp_safe(target, key_data, app_name)
                 
                 elif channel == "email":
-                    await NotificationService._send_email_safe(target, key_data, app_name)
+                    status = await NotificationService._send_email_safe(target, key_data, app_name)
                 
-                result_state["success"].append(channel)
-                metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status="sent").inc()
+                if status == "sent":
+                    result_state["success"].append(channel)
+                else:
+                    result_state["skipped"].append(channel)
+                    
+                metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status=status).inc()
             except Exception as e:
                 result_state["failed"][channel] = str(e)
                 metrics.NOTIFICATIONS_TOTAL.labels(channel=channel, status="failed").inc()
@@ -365,71 +370,54 @@ class NotificationService:
             return None
 
     @staticmethod
-    async def _send_email_safe(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None):
+    async def _send_email_safe(email: str, key_data: Dict[str, Any], app_name: str, sender_name: str = None) -> str:
         structured_log(logger, logging.INFO, "notification_initiated", channel="email", target=email)
         
         # 1. Resolve App and Provider
         key_id = key_data.get("id")
         
         key = await NotificationService._get_hydrated_key_config(key_id)
-        company_provider = None
+        if not key:
+            structured_log(logger, logging.WARNING, "notification_skipped", channel="email", target=email, reason="key_not_found")
+            return "skipped"
+
+        company_provider = await NotificationService.get_smtp_provider_for_key(key)
+
+        # 2. Strict Requirement: Company SMTP MUST be available
+        if not company_provider:
+            structured_log(logger, logging.WARNING, "notification_skipped", 
+                           channel="email", target=email, reason="no_tenant_smtp_configured", key_id=key_id)
+            return "skipped"
+
+        res = await email_service.send_license_email(
+            email, key_data, app_name, 
+            sender_name=key.from_name or sender_name,
+            providerOverride=company_provider
+        )
         
-        if key:
-            company_provider = await NotificationService.get_smtp_provider_for_key(key)
-
-            # 2. Attempt Company SMTP if available
-            if company_provider:
-                res = await email_service.send_license_email(
-                    email, key_data, app_name, 
-                    sender_name=key.from_name or sender_name,
-                    providerOverride=company_provider
+        if res.get("status") == "success":
+            async with remote_session() as db:
+                await AdminRepo.create_history_entry(
+                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    reason="EMAIL_SENT_COMPANY"
                 )
-                
-                if res.get("status") == "success":
-                    async with remote_session() as db:
-                        await AdminRepo.create_history_entry(
-                            db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                            reason="EMAIL_SENT_COMPANY"
-                        )
-                    structured_log(logger, logging.INFO, "notification_completed", 
-                                   channel="email", target=email, provider="key", 
-                                   key_id=key_id, sender_name=key.from_name or sender_name)
-                    return
-                else:
-                    error_msg = res.get("reason", "Unknown failure")
-                    async with remote_session() as db:
-                        await AdminRepo.create_history_entry(
-                            db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                            reason="EMAIL_FAILED_COMPANY"
-                        )
-                    structured_log(logger, logging.WARNING, "notification_failure_key", 
-                                   channel="email", target=email, error_message=error_msg, key_id=key_id)
-                    # Proceed to fallback
-                    structured_log(logger, logging.INFO, "notification_fallback_triggered", channel="email", target=email, key_id=key_id)
-
-            # 3. System Fallback
-            structured_log(logger, logging.INFO, "using_system_fallback", channel="email", target=email, key_id=key_id)
-            res = await email_service.send_license_email(email, key_data, app_name, sender_name=sender_name)
-            
-            if res.get("status") == "success":
-                async with remote_session() as db:
-                    await AdminRepo.create_history_entry(
-                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                        reason="EMAIL_SENT_SYSTEM"
-                    )
-                structured_log(logger, logging.INFO, "notification_completed", channel="email", target=email, provider="system", key_id=key_id)
-            else:
-                error_msg = res.get("reason", "Unknown API error")
-                async with remote_session() as db:
-                    await AdminRepo.create_history_entry(
-                        db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
-                        reason="EMAIL_FAILED_SYSTEM"
-                    )
-                structured_log(logger, logging.ERROR, "notification_failure_system", channel="email", target=email, error_message=error_msg, key_id=key_id)
-                raise Exception(f"Email failure: {error_msg}")
+            structured_log(logger, logging.INFO, "notification_completed", 
+                           channel="email", target=email, provider="key", 
+                           key_id=key_id, sender_name=key.from_name or sender_name)
+            return "sent"
+        else:
+            error_msg = res.get("reason", "Unknown failure")
+            async with remote_session() as db:
+                await AdminRepo.create_history_entry(
+                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    reason="EMAIL_FAILED_COMPANY"
+                )
+            structured_log(logger, logging.ERROR, "notification_failure", 
+                           channel="email", target=email, error_message=error_msg, key_id=key_id)
+            raise Exception(f"Company Email failure: {error_msg}")
 
     @staticmethod
-    async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: str = None):
+    async def _send_whatsapp_safe(phone: str, key_data: Dict[str, Any], app_name: str, sender_channel: str = None) -> str:
         structured_log(logger, logging.INFO, "notification_initiated", channel="whatsapp", target=phone)
         
         # 1. Resolve channel from Key if not provided (with caching)
@@ -440,6 +428,11 @@ class NotificationService:
             key = await NotificationService._get_hydrated_key_config(key_id)
             if key:
                 resolved_channel = key.whatsapp_sender_channel
+
+        if not resolved_channel:
+            structured_log(logger, logging.WARNING, "notification_skipped", 
+                           channel="whatsapp", target=phone, reason="no_tenant_whatsapp_channel_configured", key_id=key_id)
+            return "skipped"
 
         # 2. Execute
         result = await whatsapp_service.send_license_whatsapp(phone, key_data, app_name, sender_channel=resolved_channel)
@@ -452,3 +445,4 @@ class NotificationService:
         structured_log(logger, logging.INFO, "notification_completed", 
                        channel="whatsapp", target=phone, result=result, 
                        channel_used=resolved_channel, key_id=key_id)
+        return "sent"

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, UUID4, field_validator, EmailStr
+from pydantic import BaseModel, UUID4, field_validator, EmailStr, Field, ConfigDict
 import re
 from typing import Optional, List
 from datetime import datetime
@@ -76,15 +76,17 @@ class ActivationKeyCreate(BaseModel):
 
     # --- Communication Settings (Multi-tenant) ---
     smtp_enabled: bool = False
-    smtp_host: Optional[str] = "smtp.gmail.com"
-    smtp_port: Optional[int] = 587
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None
-    from_email: Optional[str] = None
-    from_name: Optional[str] = None
+    smtp_host: Optional[str] = Field("smtp.gmail.com", alias="SMTP_HOST")
+    smtp_port: Optional[int] = Field(587, alias="SMTP_PORT")
+    smtp_user: Optional[str] = Field(None, alias="SMTP_USER")
+    smtp_password: Optional[str] = Field(None, alias="SMTP_PASS")
+    from_email: Optional[str] = Field(None, alias="EMAILS_FROM_EMAIL")
+    from_name: Optional[str] = Field(None, alias="EMAILS_FROM_NAME")
     
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("smtp_host")
     @classmethod
@@ -154,15 +156,17 @@ class ActivationKeyUpdate(BaseModel):
 
     # Communication Settings Update
     smtp_enabled: Optional[bool] = None
-    smtp_host: Optional[str] = None
-    smtp_port: Optional[int] = None
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None
-    from_email: Optional[str] = None
-    from_name: Optional[str] = None
+    smtp_host: Optional[str] = Field(None, alias="SMTP_HOST")
+    smtp_port: Optional[int] = Field(None, alias="SMTP_PORT")
+    smtp_user: Optional[str] = Field(None, alias="SMTP_USER")
+    smtp_password: Optional[str] = Field(None, alias="SMTP_PASS")
+    from_email: Optional[str] = Field(None, alias="EMAILS_FROM_EMAIL")
+    from_name: Optional[str] = Field(None, alias="EMAILS_FROM_NAME")
     smtp_status: Optional[str] = None
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("smtp_host")
     @classmethod
@@ -226,17 +230,16 @@ class ActivationKeyRead(BaseModel):
 
     # Communication Settings
     smtp_enabled: bool
-    smtp_host: Optional[str]
-    smtp_port: Optional[int]
-    smtp_user: Optional[str]
-    from_email: Optional[str]
-    from_name: Optional[str]
+    smtp_host: Optional[str] = Field(None, alias="SMTP_HOST")
+    smtp_port: Optional[int] = Field(None, alias="SMTP_PORT")
+    smtp_user: Optional[str] = Field(None, alias="SMTP_USER")
+    from_email: Optional[str] = Field(None, alias="EMAILS_FROM_EMAIL")
+    from_name: Optional[str] = Field(None, alias="EMAILS_FROM_NAME")
     smtp_status: str
     whatsapp_sender_channel: Optional[str]
     email_sender: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ─────────────────────────────────────────────
