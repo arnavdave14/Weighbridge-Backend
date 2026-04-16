@@ -8,7 +8,7 @@ from app.database.db_manager import get_remote_db
 from app.models.admin_models import DocumentDeliveryLog, ActivationKey
 from app.api.admin_deps import get_current_admin
 
-router = APIRouter()
+router = APIRouter(prefix="/documents", tags=["Admin Documents"])
 
 @router.get("/logs")
 async def get_document_logs(

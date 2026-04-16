@@ -36,7 +36,7 @@ export default function DocumentDashboard() {
 
   async function fetchStats() {
     try {
-      const res = await api.get('/admin/documents/stats')
+      const res = await api.get('/documents/stats')
       setStats(res.data)
     } catch (err) {
       console.error('Failed to load doc stats', err)
@@ -53,7 +53,7 @@ export default function DocumentDashboard() {
       if (search) params.append('search', search)
       if (statusFilter) params.append('status', statusFilter)
 
-      const res = await api.get(`/admin/documents/logs?${params}`)
+      const res = await api.get(`/documents/logs?${params}`)
       setLogs(res.data.items || [])
       setTotal(res.data.total || 0)
     } catch (err) {

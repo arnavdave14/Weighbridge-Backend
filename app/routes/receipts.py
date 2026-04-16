@@ -2,8 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from typing import Optional
 from app.database.db_manager import get_db
+from app.models.models import Receipt, Machine
 from app.database.sqlite import local_session
 from app.database.postgres import remote_session
 from app.schemas.schemas import ReceiptSync, SyncResponse
@@ -144,9 +146,22 @@ async def whatsapp_send_direct(
         payload["pdf_content"] = await pdf_file.read()
         payload["filename"] = pdf_file.filename
 
-    # 3. Send via Stateless Service
+    # 3. Resolve Sender Channel from Machine/Key
+    result = await db.execute(select(Receipt).where(Receipt.id == receipt_id))
+    receipt = result.scalar_one_or_none()
+    sender_channel = None
+    if receipt:
+        # Machine ID in Receipt relates to the Token in ActivationKey
+        key_stmt = select(ActivationKey).where(ActivationKey.token == receipt.machine_id)
+        key_res = await db.execute(key_stmt)
+        key = key_res.scalar_one_or_none()
+        if key:
+            sender_channel = key.whatsapp_sender_channel
+
+    # 4. Send via Stateless Service
     result = await send_whatsapp(
         phone=phone,
+        sender_channel=sender_channel,
         **payload
     )
     
@@ -185,8 +200,13 @@ async def whatsapp_send_test(
         payload["pdf_content"] = await pdf_file.read()
         payload["filename"] = pdf_file.filename
 
-    # 3. Send via Stateless Service
+    # 3. Resolve Sender Channel (Optional form field or default from testing)
+    # In a full multi-tenant test, we'd pull this from the session or a passed parameter
+    sender_channel = "919407184405:30" # Default testing channel
+    
+    # 4. Send via Stateless Service
     return await send_whatsapp(
         phone=phone,
+        sender_channel=sender_channel,
         **payload
     )

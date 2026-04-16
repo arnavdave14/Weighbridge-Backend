@@ -184,7 +184,7 @@ app.include_router(notifications.router)
 app.include_router(admin_branding.router)
 app.include_router(admin_dlq.router)
 app.include_router(admin_receipts.router)
-app.include_router(admin_documents.router, prefix="/admin/documents", tags=["Admin Documents"])
+app.include_router(admin_documents.router, prefix="/admin")
 
 # Employee Auth (device-facing + admin employee management)
 app.include_router(employee_auth.router)

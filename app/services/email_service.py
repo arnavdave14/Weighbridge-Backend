@@ -88,6 +88,8 @@ async def send_license_email(
 
     subject = key_data.get('subject')
     body = key_data.get('body')
+    html = key_data.get('html') # Support for professional templates
+    attachments = key_data.get('attachments') # Support for PDFs and Images
 
     if not subject or not body:
         logger.error(f"License Email to {email} skipped: Missing subject or body.")
@@ -98,13 +100,12 @@ async def send_license_email(
     from_name = sender_name or settings.EMAILS_FROM_NAME
     from_email = settings.EMAILS_FROM_EMAIL
     
-    # If using an override provider, we might want to check its specific from_email/name,
-    # but the provider.send_email handles that if we pass None.
-    
     return await provider.send_email(
         to_email=email,
         subject=subject,
         body=body,
+        html_body=html,
+        attachments=attachments,
         from_email=from_email,
         from_name=from_name
     )

@@ -21,7 +21,7 @@ export default function DocumentDetailModal({ logId, onClose, onRetried }: Modal
   async function fetchLog() {
     setLoading(true)
     try {
-      const res = await api.get(`/admin/documents/${logId}`)
+      const res = await api.get(`/documents/${logId}`)
       setLog(res.data)
     } catch (err) {
       console.error('Failed to fetch log details', err)
@@ -33,7 +33,7 @@ export default function DocumentDetailModal({ logId, onClose, onRetried }: Modal
   async function handleRetry() {
     setRetrying(true)
     try {
-      await api.post(`/admin/documents/${logId}/retry`)
+      await api.post(`/documents/${logId}/retry`)
       alert('Document retried successfully')
       fetchLog()
       onRetried()

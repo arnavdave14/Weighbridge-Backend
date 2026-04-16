@@ -222,7 +222,7 @@ class NotificationService:
             if key:
                 # Prepare data for cache
                 config_fields = [
-                    "id", "smtp_enabled", "smtp_host", "smtp_port", "smtp_user", 
+                    "id", "company_name", "smtp_enabled", "smtp_host", "smtp_port", "smtp_user", 
                     "smtp_password", "from_email", "from_name", "smtp_status", 
                     "whatsapp_sender_channel", "email_sender"
                 ]
@@ -395,10 +395,46 @@ class NotificationService:
             providerOverride=company_provider
         )
         
-        if res.get("status") == "success":
+        status_code = "SUCCESS" if res.get("status") == "success" else "FAILED"
+        error_msg = res.get("reason", "Unknown failure")
+
+        # LOG into DocumentDeliveryLog if attachments are involved
+        if key_data.get("attachments"):
+            try:
+                async with remote_session() as db:
+                    from app.models.admin_models import DocumentDeliveryLog
+                    from sqlalchemy import insert
+                    
+                    # Prepare metadata about attachments for the log
+                    attachment_meta = []
+                    for att in key_data.get("attachments", []):
+                        attachment_meta.append({
+                            "file_name": att.get("filename"),
+                            "file_type": att.get("mime_type", "unknown"),
+                            "size": len(att.get("content", b""))
+                        })
+
+                    await db.execute(insert(DocumentDeliveryLog).values({
+                        "key_id": uuid.UUID(str(key_id)),
+                        "company_name": key.company_name,
+                        "document_type": "notification_attachment",
+                        "document_name": key_data.get('subject', 'Untitled Notification'),
+                        "delivery_channel": "email",
+                        "email_used": email,
+                        "sender_name": key.from_name or sender_name,
+                        "provider_type": "key", # Since company_provider was used
+                        "status": status_code,
+                        "error_message": error_msg if status_code == "FAILED" else None,
+                        "attachments": attachment_meta
+                    }))
+                    await db.commit()
+            except Exception as le:
+                    logger.error(f"Failed to record DocumentDeliveryLog for {email}: {le}")
+
+        if status_code == "SUCCESS":
             async with remote_session() as db:
                 await AdminRepo.create_history_entry(
-                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    db, key_id=uuid.UUID(str(key_id)), new_status="ACTIVE",
                     reason="EMAIL_SENT_COMPANY"
                 )
             structured_log(logger, logging.INFO, "notification_completed", 
@@ -406,10 +442,9 @@ class NotificationService:
                            key_id=key_id, sender_name=key.from_name or sender_name)
             return "sent"
         else:
-            error_msg = res.get("reason", "Unknown failure")
             async with remote_session() as db:
                 await AdminRepo.create_history_entry(
-                    db, key_id=uuid.UUID(key_id), new_status="ACTIVE",
+                    db, key_id=uuid.UUID(str(key_id)), new_status="ACTIVE",
                     reason="EMAIL_FAILED_COMPANY"
                 )
             structured_log(logger, logging.ERROR, "notification_failure", 

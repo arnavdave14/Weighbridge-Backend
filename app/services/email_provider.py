@@ -3,6 +3,9 @@ from typing import Dict, Any, List, Optional
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import mimetypes
 import asyncio
 import logging
 
@@ -19,6 +22,8 @@ class BaseEmailProvider(ABC):
         to_email: str, 
         subject: str, 
         body: str, 
+        html_body: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         from_email: Optional[str] = None,
         from_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -48,10 +53,13 @@ class SMTPProvider(BaseEmailProvider):
         to_email: str, 
         subject: str, 
         body: str, 
+        html_body: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
         from_email: Optional[str] = None,
         from_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        msg = MIMEMultipart()
+        # Top-level container
+        msg = MIMEMultipart('mixed')
         
         # Use provided from_email/name or fallback to the SMTP user
         display_from = f"{from_name} <{from_email}>" if from_name and from_email else from_email or self.user
@@ -59,7 +67,39 @@ class SMTPProvider(BaseEmailProvider):
         msg['From'] = display_from
         msg['To'] = to_email
         msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
+        
+        # --- 1. Body Part (Alternative: Plain vs HTML) ---
+        body_part = MIMEMultipart('alternative')
+        body_part.attach(MIMEText(body, 'plain'))
+        if html_body:
+            body_part.attach(MIMEText(html_body, 'html'))
+        msg.attach(body_part)
+        
+        # --- 2. Attachments Part ---
+        if attachments:
+            total_size = sum(len(a.get("content", b"")) for a in attachments)
+            if total_size > 5 * 1024 * 1024: # 5MB limit
+                logger.error(f"Email to {to_email} aborted: Attachments exceed 5MB ({total_size} bytes)")
+                return {"status": "failed", "reason": "attachment_limit_exceeded"}
+
+            for att in attachments:
+                filename = att.get("filename", "attachment")
+                content = att.get("content")
+                if not content: continue
+                
+                # Dynamic MIME Type Detection
+                mime_type = att.get("mime_type")
+                if not mime_type:
+                    mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = "application/octet-stream"
+                
+                maintype, subtype = mime_type.split("/", 1)
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(content)
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+                msg.attach(part)
 
         try:
             # Running synchronous smtplib in a thread pool to avoid blocking the event loop
