@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'react-router-dom'
 import { 
   Plus, Copy, Check, Trash2, KeyRound, Loader2, Filter, 
-  Clock, RefreshCw, Layers, X, Calendar, Settings, ShieldCheck
+  Clock, RefreshCw, Layers, X, Calendar, Settings, ShieldCheck,
+  ChevronRight, ChevronLeft, Wifi, CircleDot, CheckCircle2, XCircle
 } from 'lucide-react'
 import api from '../services/api'
 import { format } from 'date-fns'
@@ -36,6 +37,12 @@ interface Key {
   from_name?: string;
   smtp_status: 'VALID' | 'INVALID' | 'UNTESTED';
   whatsapp_sender_channel?: string;
+
+  // Verification Status
+  whatsapp_verified?: boolean;
+  email_verified?: boolean;
+  whatsapp_verified_at?: string | null;
+  email_verified_at?: string | null;
 }
 
 // --- Sub-components ---
@@ -224,6 +231,63 @@ const ImageUpload = ({ label, value, target, appId, onChange }: { label: string;
   )
 }
 
+// --- Verification Status Badge ---
+type VerifyStatus = 'idle' | 'testing' | 'success' | 'failed'
+
+const VerifyBadge = ({ status, verifiedAt }: { status: VerifyStatus | boolean | undefined, verifiedAt?: string | null }) => {
+  if (status === true || status === 'success') return (
+    <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600">
+      <CheckCircle2 className="w-3 h-3" /> Verified{verifiedAt ? ` · ${format(new Date(verifiedAt), 'MMM d')}` : ''}
+    </span>
+  )
+  if (status === false || status === 'failed') return (
+    <span className="flex items-center gap-1 text-[10px] font-bold text-red-500">
+      <XCircle className="w-3 h-3" /> Failed
+    </span>
+  )
+  if (status === 'testing') return (
+    <span className="flex items-center gap-1 text-[10px] font-bold text-amber-500">
+      <Loader2 className="w-3 h-3 animate-spin" /> Testing…
+    </span>
+  )
+  return (
+    <span className="flex items-center gap-1 text-[10px] font-bold text-surface-400">
+      <CircleDot className="w-3 h-3" /> Not Tested
+    </span>
+  )
+}
+
+// --- Wizard Step Indicator ---
+const StepIndicator = ({ current, total, labels }: { current: number, total: number, labels: string[] }) => (
+  <div className="flex items-center gap-0 mb-6">
+    {labels.map((label, i) => {
+      const step = i + 1
+      const done = current > step
+      const active = current === step
+      return (
+        <div key={i} className="flex items-center flex-1 last:flex-none">
+          <div className="flex flex-col items-center gap-1">
+            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${
+              done ? 'bg-brand-600 border-brand-600 text-white' :
+              active ? 'bg-white border-brand-600 text-brand-600' :
+              'bg-white border-surface-200 text-surface-400'
+            }`}>
+              {done ? <Check className="w-3.5 h-3.5" /> : step}
+            </div>
+            <span className={`text-[9px] font-bold uppercase tracking-wider whitespace-nowrap ${
+              active ? 'text-brand-600' : done ? 'text-surface-500' : 'text-surface-300'
+            }`}>{label}</span>
+          </div>
+          {i < total - 1 && (
+            <div className={`flex-1 h-0.5 mx-1 mb-4 transition-all ${ done ? 'bg-brand-400' : 'bg-surface-200'}`} />
+          )}
+        </div>
+      )
+    })}
+  </div>
+)
+
+// --- CreateKeyDrawer (4-Step Wizard) ---
 const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   isOpen: boolean;
   onClose: () => void;
@@ -231,72 +295,99 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   onSuccess: (rawKeys: string[]) => void;
 }) => {
   const toast = useToast()
+  const [step, setStep] = useState(1)
   const [saving, setSaving] = useState(false)
   const [lastSubmitted, setLastSubmitted] = useState<string | null>(null)
-  
+
+  // WA test state
+  const [waTestStatus, setWaTestStatus] = useState<VerifyStatus>('idle')
+  const [waTestPhone, setWaTestPhone] = useState('')
+  // SMTP test state
+  const [smtpTestStatus, setSmtpTestStatus] = useState<VerifyStatus>('idle')
+  const [smtpTestEmail, setSmtpTestEmail] = useState('')
+
   const initialForm = {
-    app_id: '', 
-    company_name: '', 
-    expiry_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'), 
-    count: 1, 
-    mobile_number: '', 
-    address: '', 
+    app_id: '', company_name: '',
+    expiry_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'),
+    count: 1, mobile_number: '', address: '',
     labels: [] as CustomLabel[],
-    bill_header_1: '', 
-    bill_header_2: '', 
-    bill_header_3: '', 
-    bill_footer: '',
-    logo_url: '', 
-    signup_image_url: '',
+    bill_header_1: '', bill_header_2: '', bill_header_3: '', bill_footer: '',
+    logo_url: '', signup_image_url: '',
     notification_type: 'both' as 'whatsapp' | 'email' | 'both',
-    
-    // Communication Settings
     smtp_enabled: false,
-    SMTP_HOST: 'smtp.gmail.com',
-    SMTP_PORT: 587,
-    SMTP_USER: '',
-    SMTP_PASS: '',
-    EMAILS_FROM_EMAIL: '',
-    EMAILS_FROM_NAME: '',
+    SMTP_HOST: 'smtp.gmail.com', SMTP_PORT: 587,
+    SMTP_USER: '', SMTP_PASS: '',
+    EMAILS_FROM_EMAIL: '', EMAILS_FROM_NAME: '',
     whatsapp_sender_channel: ''
   }
   const [form, setForm] = useState(initialForm)
 
+  const resetAll = () => {
+    setStep(1); setForm(initialForm)
+    setWaTestStatus('idle'); setWaTestPhone('')
+    setSmtpTestStatus('idle'); setSmtpTestEmail('')
+    setLastSubmitted(null)
+  }
+
+  const handleClose = () => { resetAll(); onClose() }
 
   const isDuplicate = useMemo(() => {
-    if (!lastSubmitted) return false;
-    const current = JSON.stringify({
-      app_id: form.app_id,
-      company: form.company_name
-    });
-    return current === lastSubmitted;
-  }, [form.app_id, form.company_name, lastSubmitted]);
+    if (!lastSubmitted) return false
+    return JSON.stringify({ app_id: form.app_id, company: form.company_name }) === lastSubmitted
+  }, [form.app_id, form.company_name, lastSubmitted])
 
-  const handleSubmit = async (e: FormEvent) => {
+  // Step 3: Test WhatsApp (stateless — no key exists yet)
+  const handleTestWA = async () => {
+    if (!form.whatsapp_sender_channel || !waTestPhone) {
+      toast.error('Enter both the Sender Channel and a Test Phone Number.')
+      return
+    }
+    setWaTestStatus('testing')
+    try {
+      const { data } = await api.post('/apps/comms/test-whatsapp', {
+        whatsapp_sender_channel: form.whatsapp_sender_channel,
+        test_receiver_phone: waTestPhone
+      })
+      setWaTestStatus(data.status === 'success' ? 'success' : 'failed')
+      if (data.status === 'success') toast.success(data.message)
+      else toast.error(data.reason || 'WhatsApp test failed.')
+    } catch (err: any) {
+      setWaTestStatus('failed')
+      toast.error(err.response?.data?.detail || 'WhatsApp test failed.')
+    }
+  }
 
-    e.preventDefault()
-    if (!form.app_id) { toast.error('You have to first select the application.'); return }
+  // Step 3: Test SMTP (stateless)
+  const handleTestSMTP = async () => {
+    if (!smtpTestEmail) { toast.error('Enter a test receiver email.'); return }
+    setSmtpTestStatus('testing')
+    try {
+      const { data } = await api.post('/apps/comms/test-smtp', {
+        smtp_host: form.SMTP_HOST, smtp_port: form.SMTP_PORT,
+        smtp_user: form.SMTP_USER, smtp_password: form.SMTP_PASS,
+        from_email: form.EMAILS_FROM_EMAIL, from_name: form.EMAILS_FROM_NAME,
+        test_receiver_email: smtpTestEmail
+      })
+      setSmtpTestStatus(data.status === 'success' ? 'success' : 'failed')
+      if (data.status === 'success') toast.success(data.message)
+      else toast.error(data.reason || 'SMTP test failed.')
+    } catch (err: any) {
+      setSmtpTestStatus('failed')
+      toast.error(err.response?.data?.detail || 'SMTP test failed.')
+    }
+  }
+
+  const handleSubmit = async () => {
+    if (!form.app_id) { toast.error('Select an application first.'); return }
     setSaving(true)
     try {
-      const payload = { 
-        ...form, 
-        expiry_date: new Date(form.expiry_date).toISOString() 
-      }
-      
-      // Don't send empty password
+      const payload = { ...form, expiry_date: new Date(form.expiry_date).toISOString() }
       if (!payload.SMTP_PASS) delete (payload as any).SMTP_PASS
-
       const { data } = await api.post('/apps/keys', payload)
-      
-      setLastSubmitted(JSON.stringify({
-        app_id: form.app_id,
-        company: form.company_name
-      }))
-
+      setLastSubmitted(JSON.stringify({ app_id: form.app_id, company: form.company_name }))
       onSuccess(data.map((d: any) => d.raw_activation_key))
       toast.success(`Successfully generated ${form.count} activation key(s)!`)
-      onClose()
-      setForm(initialForm) // Reset
+      handleClose()
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Generation failed')
     } finally {
@@ -304,267 +395,285 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     }
   }
 
+  const STEPS = ['Identity', 'Config', 'Comms', 'Generate']
+
   return (
     <AnimatePresence>
       {isOpen && (
         <>
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 z-40 bg-black/30" />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={handleClose} className="fixed inset-0 z-40 bg-black/30" />
           <motion.div initial={{ x: '100%', opacity: 0.5 }} animate={{ x: 0, opacity: 1 }} exit={{ x: '100%', opacity: 0.5 }} transition={{ type: 'tween', ease: 'easeOut', duration: 0.25 }} className="fixed inset-y-0 right-0 z-50 w-full max-w-xl glass border-l border-white/20 flex flex-col">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-white/30">
-              <h2 className="text-lg font-bold text-surface-900">Generate Activation Key</h2>
-              <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-500"><X className="w-4 h-4" /></button>
+            {/* Header */}
+            <div className="px-6 pt-5 pb-4 border-b border-white/30">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-surface-900">Generate Activation Key</h2>
+                <button onClick={handleClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-500"><X className="w-4 h-4" /></button>
+              </div>
+              <StepIndicator current={step} total={4} labels={STEPS} />
             </div>
-            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
-              <div className="bg-brand-50/50 p-4 rounded-2xl border border-brand-100">
-                <label className="form-label text-brand-700">Application *</label>
-                <select required value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value })} className="form-input bg-white">
-                  <option value="">Select application…</option>
-                  {apps.map((a) => <option key={a.id} value={a.id}>{a.app_name} ({a.app_id})</option>)}
-                </select>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1">Company Identity</h3>
-                  <div className="h-px bg-surface-100 w-full mt-2" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Company Name *</label>
-                    <input required value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} className="form-input font-bold" />
-                  </div>
-                  <ImageUpload label="Company Logo" value={form.logo_url} target="logo" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, logo_url: url }))} />
-                  <ImageUpload label="Sign-Up Image" value={form.signup_image_url} target="signup" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, signup_image_url: url }))} />
-                </div>
-              </div>
-              <div className="space-y-4 pt-2">
-                <div>
-                  <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1">Contact Details</h3>
-                  <p className="text-[9px] text-surface-400 italic pl-1 mt-0.5">Used for company profile and display purposes</p>
-                  <div className="h-px bg-surface-100 w-full mt-2" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Mobile Number</label>
-                    <input value={form.mobile_number} onChange={(e) => setForm({ ...form, mobile_number: e.target.value })} placeholder="+91 98XXX XXXX" className="form-input" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Office Address</label>
-                    <textarea rows={2} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Full company address..." className="form-input resize-none" />
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-4 pt-2">
-                <div>
-                  <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1">Software Configuration</h3>
-                  <p className="text-[9px] text-surface-400 italic pl-1 mt-0.5">Define custom fields and receipt layout for this tenant</p>
-                  <div className="h-px bg-surface-100 w-full mt-2" />
-                </div>
-                <div className="bg-surface-50/50 p-4 rounded-2xl border border-surface-200 space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-[10px] font-bold text-surface-500 uppercase tracking-wider">Custom Fields / Labels</label>
-                      <button 
-                        type="button" 
-                        onClick={() => setForm(f => ({ ...f, labels: [...f.labels, { name: '', type: 'text', required: false, regex: '' }] }))}
-                        className="text-[10px] font-bold text-brand-600 hover:text-brand-700 flex items-center gap-1 group"
-                      >
-                        <Plus className="w-3 h-3 group-hover:scale-110 transition-transform" /> Add Field
-                      </button>
-                    </div>
 
-                    <div className="space-y-4">
-                      {form.labels.length === 0 && (
-                        <div className="text-[10px] text-surface-400 text-center py-4 border-2 border-dashed border-surface-200 rounded-xl">
-                          No custom fields added.
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <AnimatePresence mode="wait">
+
+                {/* ── Step 1: Company Identity ── */}
+                {step === 1 && (
+                  <motion.div key="s1" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
+                    <div className="bg-brand-50/50 p-4 rounded-2xl border border-brand-100">
+                      <label className="form-label text-brand-700">Application *</label>
+                      <select required value={form.app_id} onChange={(e) => setForm({ ...form, app_id: e.target.value })} className="form-input bg-white">
+                        <option value="">Select application…</option>
+                        {apps.map((a) => <option key={a.id} value={a.id}>{a.app_name} ({a.app_id})</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">Company Identity</h3>
+                      <div className="h-px bg-surface-100 w-full mb-4" />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Company Name *</label>
+                          <input required value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} className="form-input font-bold" />
                         </div>
-                      )}
-                      {form.labels.map((field, idx) => (
-                        <div key={idx} className="space-y-2 animate-in slide-in-from-right-2 duration-200">
-                          <div className="flex items-center gap-2 group">
-                            <input 
-                              required
-                              value={field.name}
-                              onChange={(e) => {
-                                const newList = [...form.labels];
-                                newList[idx].name = e.target.value;
-                                setForm({ ...form, labels: newList });
-                              }}
-                              placeholder="Field Name"
-                              className="form-input text-xs py-1.5 flex-1"
-                            />
-                            <select 
-                              value={field.type}
-                              onChange={(e) => {
-                                const newList = [...form.labels];
-                                newList[idx].type = e.target.value as any;
-                                setForm({ ...form, labels: newList });
-                              }}
-                              className="form-input text-[10px] py-1.5 w-24 bg-white"
-                            >
+                        <ImageUpload label="Company Logo" value={form.logo_url} target="logo" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, logo_url: url }))} />
+                        <ImageUpload label="Sign-Up Image" value={form.signup_image_url} target="signup" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, signup_image_url: url }))} />
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">Contact Details</h3>
+                      <div className="h-px bg-surface-100 w-full mb-4" />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Mobile Number</label>
+                          <input value={form.mobile_number} onChange={(e) => setForm({ ...form, mobile_number: e.target.value })} placeholder="91XXXXXXXXXX" className="form-input" />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Office Address</label>
+                          <textarea rows={2} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Full company address..." className="form-input resize-none" />
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* ── Step 2: Software Config ── */}
+                {step === 2 && (
+                  <motion.div key="s2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5">
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">Custom Fields / Labels</h3>
+                      <div className="h-px bg-surface-100 w-full mb-3" />
+                      <div className="space-y-3">
+                        <div className="flex justify-end">
+                          <button type="button" onClick={() => setForm(f => ({ ...f, labels: [...f.labels, { name: '', type: 'text', required: false }] }))} className="text-[10px] font-bold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                            <Plus className="w-3 h-3" /> Add Field
+                          </button>
+                        </div>
+                        {form.labels.length === 0 && (
+                          <div className="text-[10px] text-surface-400 text-center py-4 border-2 border-dashed border-surface-200 rounded-xl">No custom fields added.</div>
+                        )}
+                        {form.labels.map((field, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input required value={field.name} onChange={(e) => { const l = [...form.labels]; l[idx].name = e.target.value; setForm({ ...form, labels: l }) }} placeholder="Field Name" className="form-input text-xs py-1.5 flex-1" />
+                            <select value={field.type} onChange={(e) => { const l = [...form.labels]; l[idx].type = e.target.value as any; setForm({ ...form, labels: l }) }} className="form-input text-[10px] py-1.5 w-24 bg-white">
                               <option value="text">Text</option>
                               <option value="alphanumeric">Alphanumeric</option>
                               <option value="alphabetical">Letters</option>
                               <option value="numeric">Numbers</option>
                               <option value="date">Date</option>
                             </select>
-                            <label className="flex items-center gap-1.5 cursor-pointer px-2 py-1.5 rounded-lg hover:bg-surface-100 transition-colors">
-                              <input 
-                                type="checkbox"
-                                checked={field.required}
-                                onChange={(e) => {
-                                  const newList = [...form.labels];
-                                  newList[idx].required = e.target.checked;
-                                  setForm({ ...form, labels: newList });
-                                }}
-                                className="w-3 h-3 accent-brand-500 rounded"
-                              />
-                              <span className="text-[9px] font-bold text-surface-500 uppercase tracking-tighter">Req</span>
+                            <label className="flex items-center gap-1 cursor-pointer text-[9px] font-bold text-surface-500 uppercase">
+                              <input type="checkbox" checked={field.required} onChange={(e) => { const l = [...form.labels]; l[idx].required = e.target.checked; setForm({ ...form, labels: l }) }} className="w-3 h-3 accent-brand-500" /> Req
                             </label>
-                            <button 
-                              type="button"
-                              onClick={() => setForm(f => ({ ...f, labels: f.labels.filter((_, i) => i !== idx) }))}
-                              className="p-1.5 text-surface-300 hover:text-red-500 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <button type="button" onClick={() => setForm(f => ({ ...f, labels: f.labels.filter((_, i) => i !== idx) }))} className="p-1.5 text-surface-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 pt-4 border-t border-surface-200">
-                    <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 1</label><input value={form.bill_header_1} onChange={(e) => setForm({ ...form, bill_header_1: e.target.value })} className="form-input" /></div>
-                    <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 2</label><input value={form.bill_header_2} onChange={(e) => setForm({ ...form, bill_header_2: e.target.value })} className="form-input" /></div>
-                    <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 3</label><input value={form.bill_header_3} onChange={(e) => setForm({ ...form, bill_header_3: e.target.value })} className="form-input" /></div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Bill Footer</label><input value={form.bill_footer} onChange={(e) => setForm({ ...form, bill_footer: e.target.value })} placeholder="Terms and conditions..." className="form-input" /></div>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-4 pt-2">
-                <div>
-                  <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1">License & Delivery</h3>
-                  <div className="h-px bg-surface-100 w-full mt-2" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Expiry Date *</label>
-                    <input type="date" required value={form.expiry_date} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} className="form-input" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Key Count</label>
-                    <input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" />
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-4 pt-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-[10px] font-bold text-surface-600 uppercase tracking-[0.2em] pl-1">Communication Infrastructure</h3>
-                    <p className="text-[9px] text-surface-400 italic pl-1 mt-0.5">Used for sending bills, PDFs, and notifications to customers</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" checked={form.smtp_enabled}
-                      onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })}
-                      className="sr-only peer" />
-                    <div className="w-8 h-4 bg-surface-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600 shadow-inner"></div>
-                    <span className="ml-2 text-[10px] font-bold text-surface-500 uppercase">Custom SMTP</span>
-                  </label>
-                </div>
-                <div className="h-px bg-surface-100 w-full" />
-              </div>
-
-                <div className="space-y-4 bg-surface-50 p-4 rounded-2xl border border-surface-200">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
-                        <label className="form-label">WhatsApp Sender Channel *</label>
-                        <input 
-                          value={form.whatsapp_sender_channel} 
-                          onChange={(e) => setForm({...form, whatsapp_sender_channel: e.target.value})}
-                          placeholder="e.g. 919893224689:5" 
-                          className={`form-input ${form.whatsapp_sender_channel && !form.whatsapp_sender_channel.includes(':') ? 'border-amber-400 focus:border-amber-500' : ''}`}
-                        />
-                        {form.whatsapp_sender_channel && !form.whatsapp_sender_channel.includes(':') && (
-                          <p className="text-[9px] text-amber-600 mt-1 font-bold animate-pulse">Required format: number:id (missing ":")</p>
-                        )}
-                        <p className="text-[9px] text-surface-400 mt-1 italic leading-tight">Format: CountryCode-Number:Channel-ID (e.g., :5)</p>
-                    </div>
-
-                    <div className="col-span-2">
-                      <label className="form-label">Notification Channels to Enable</label>
-                      <div className="flex gap-2">
-                        {['both', 'whatsapp', 'email'].map((type) => (
-                          <button
-                            key={type}
-                            type="button"
-                            onClick={() => setForm({ ...form, notification_type: type as any })}
-                            className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-bold capitalize transition-all border ${
-                              form.notification_type === type 
-                                ? 'bg-brand-600 border-brand-600 text-white' 
-                                : 'bg-white border-surface-200 text-surface-600'
-                            }`}
-                          >
-                            {type}
-                          </button>
                         ))}
                       </div>
                     </div>
-                  </div>
-
-                  {form.smtp_enabled && (
-                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="pt-4 border-t border-surface-200 mt-4 space-y-4 overflow-hidden">
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP_HOST</label>
-                          <input value={form.SMTP_HOST} onChange={(e) => setForm({...form, SMTP_HOST: e.target.value})} placeholder="smtp.gmail.com" className="form-input text-sm py-1.5" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP_PORT</label>
-                          <input type="number" value={form.SMTP_PORT} onChange={(e) => setForm({...form, SMTP_PORT: parseInt(e.target.value)})} className="form-input text-sm py-1.5" />
-                        </div>
-                      </div>
-
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">Bill Layout</h3>
+                      <div className="h-px bg-surface-100 w-full mb-3" />
                       <div className="grid grid-cols-2 gap-3">
+                        <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 1</label><input value={form.bill_header_1} onChange={(e) => setForm({ ...form, bill_header_1: e.target.value })} className="form-input" /></div>
+                        <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 2</label><input value={form.bill_header_2} onChange={(e) => setForm({ ...form, bill_header_2: e.target.value })} className="form-input" /></div>
+                        <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Header 3</label><input value={form.bill_header_3} onChange={(e) => setForm({ ...form, bill_header_3: e.target.value })} className="form-input" /></div>
+                        <div className="col-span-2"><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Bill Footer</label><input value={form.bill_footer} onChange={(e) => setForm({ ...form, bill_footer: e.target.value })} placeholder="Terms and conditions..." className="form-input" /></div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">License Details</h3>
+                      <div className="h-px bg-surface-100 w-full mb-3" />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Expiry Date *</label><input type="date" required value={form.expiry_date} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} className="form-input" /></div>
+                        <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Key Count</label><input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" /></div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* ── Step 3: Communication Setup + Test ── */}
+                {step === 3 && (
+                  <motion.div key="s3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
+
+                    {/* WhatsApp */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[10px] font-bold text-surface-600 uppercase tracking-[0.2em] pl-1">WhatsApp Sender</h3>
+                        <VerifyBadge status={waTestStatus} />
+                      </div>
+                      <div className="h-px bg-surface-100 w-full" />
+                      <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-3">
                         <div>
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">SMTP_USER</label>
-                          <input value={form.SMTP_USER} onChange={(e) => setForm({...form, SMTP_USER: e.target.value})} placeholder="user@domain.com" className="form-input text-sm py-1.5" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">
-                            SMTP_PASS {form.smtp_enabled && <span className="text-red-500">*</span>}
-                          </label>
-                          <input 
-                            type="password" 
-                            required={form.smtp_enabled}
-                            value={form.SMTP_PASS} 
-                            onChange={(e) => setForm({...form, SMTP_PASS: e.target.value})} 
-                            className={`form-input text-sm py-1.5 ${form.smtp_enabled && !form.SMTP_PASS ? 'border-red-200' : ''}`}
-                            placeholder={form.smtp_enabled ? "Required" : ""}
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Sender Channel ID</label>
+                          <input
+                            value={form.whatsapp_sender_channel}
+                            onChange={(e) => { setForm({ ...form, whatsapp_sender_channel: e.target.value }); setWaTestStatus('idle') }}
+                            placeholder="91XXXXXXXXXX:ID"
+                            className={`form-input mt-1 ${ form.whatsapp_sender_channel && !form.whatsapp_sender_channel.includes(':') ? 'border-amber-400' : '' }`}
                           />
+                          {form.whatsapp_sender_channel && !form.whatsapp_sender_channel.includes(':') && (
+                            <p className="text-[9px] text-amber-600 mt-1 font-bold">Required format: number:id (missing ":")</p>
+                          )}
                         </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Test Receiver Phone <span className="text-surface-300 normal-case font-normal">(your number)</span></label>
+                          <div className="flex gap-2 mt-1">
+                            <input value={waTestPhone} onChange={(e) => setWaTestPhone(e.target.value)} placeholder="91XXXXXXXXXX" className="form-input flex-1" />
+                            <button type="button" onClick={handleTestWA} disabled={waTestStatus === 'testing'} className="btn-secondary px-3 text-[10px] font-bold whitespace-nowrap flex items-center gap-1.5">
+                              {waTestStatus === 'testing' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+                              Test WhatsApp Connection
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-surface-400 italic">This will send a test message to your number to verify the channel. Click 'Next' to continue without testing.</p>
                       </div>
+                    </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">EMAILS_FROM_EMAIL</label>
-                          <input value={form.EMAILS_FROM_EMAIL} onChange={(e) => setForm({...form, EMAILS_FROM_EMAIL: e.target.value})} placeholder="noreply@domain.com" className="form-input text-sm py-1.5" />
+                    {/* Email SMTP */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <h3 className="text-[10px] font-bold text-surface-600 uppercase tracking-[0.2em] pl-1">Email (SMTP)</h3>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" checked={form.smtp_enabled} onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })} className="sr-only peer" />
+                            <div className="w-8 h-4 bg-surface-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600 shadow-inner"></div>
+                            <span className="ml-2 text-[10px] font-bold text-surface-500 uppercase">Enable</span>
+                          </label>
                         </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">EMAILS_FROM_NAME</label>
-                          <input value={form.EMAILS_FROM_NAME} onChange={(e) => setForm({...form, EMAILS_FROM_NAME: e.target.value})} placeholder="Billing Dept" className="form-input text-sm py-1.5" />
+                        {form.smtp_enabled && <VerifyBadge status={smtpTestStatus} />}
+                      </div>
+                      <div className="h-px bg-surface-100 w-full" />
+
+                      {form.smtp_enabled && (
+                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-3 overflow-hidden">
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="col-span-2"><label className="text-[10px] font-bold text-surface-400 uppercase">SMTP Host</label><input value={form.SMTP_HOST} onChange={(e) => { setForm({ ...form, SMTP_HOST: e.target.value }); setSmtpTestStatus('idle') }} className="form-input text-sm" /></div>
+                            <div><label className="text-[10px] font-bold text-surface-400 uppercase">Port</label><input type="number" value={form.SMTP_PORT} onChange={(e) => setForm({ ...form, SMTP_PORT: parseInt(e.target.value) })} className="form-input text-sm" /></div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div><label className="text-[10px] font-bold text-surface-400 uppercase">SMTP User</label><input value={form.SMTP_USER} onChange={(e) => setForm({ ...form, SMTP_USER: e.target.value })} placeholder="user@domain.com" className="form-input text-sm" /></div>
+                            <div><label className="text-[10px] font-bold text-surface-400 uppercase">SMTP Pass <span className="text-red-500">*</span></label><input type="password" required={form.smtp_enabled} value={form.SMTP_PASS} onChange={(e) => { setForm({ ...form, SMTP_PASS: e.target.value }); setSmtpTestStatus('idle') }} className={`form-input text-sm ${form.smtp_enabled && !form.SMTP_PASS ? 'border-red-200' : ''}`} /></div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div><label className="text-[10px] font-bold text-surface-400 uppercase">From Email</label><input value={form.EMAILS_FROM_EMAIL} onChange={(e) => setForm({ ...form, EMAILS_FROM_EMAIL: e.target.value })} placeholder="noreply@domain.com" className="form-input text-sm" /></div>
+                            <div><label className="text-[10px] font-bold text-surface-400 uppercase">From Name</label><input value={form.EMAILS_FROM_NAME} onChange={(e) => setForm({ ...form, EMAILS_FROM_NAME: e.target.value })} placeholder="Billing Dept" className="form-input text-sm" /></div>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Test Receiver Email <span className="text-surface-300 normal-case font-normal">(your email)</span></label>
+                            <div className="flex gap-2 mt-1">
+                              <input value={smtpTestEmail} onChange={(e) => setSmtpTestEmail(e.target.value)} placeholder="admin@yourcompany.com" className="form-input flex-1 text-sm" />
+                              <button type="button" onClick={handleTestSMTP} disabled={smtpTestStatus === 'testing'} className="btn-secondary px-3 text-[10px] font-bold whitespace-nowrap flex items-center gap-1.5">
+                                {smtpTestStatus === 'testing' ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                                Test Email Connection
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-[9px] text-surface-400 italic">This will send a test message to your email to verify configuration. Click 'Next' to continue without testing.</p>
+                        </motion.div>
+                      )}
+
+                      {/* Notification channel selector */}
+                      <div className="mt-2">
+                        <label className="text-[10px] font-bold text-surface-500 uppercase ml-1 block mb-2">Notification Channels to Enable</label>
+                        <div className="flex gap-2">
+                          {['both', 'whatsapp', 'email'].map((type) => (
+                            <button key={type} type="button" onClick={() => setForm({ ...form, notification_type: type as any })}
+                              className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-bold capitalize transition-all border ${ form.notification_type === type ? 'bg-brand-600 border-brand-600 text-white' : 'bg-white border-surface-200 text-surface-600'}`}>
+                              {type}
+                            </button>
+                          ))}
                         </div>
                       </div>
-                    </motion.div>
-                  )}
-                </div>
-              <div className="pt-4 flex gap-3 sticky bottom-0 backdrop-blur-sm pb-2">
-                <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-                <button type="submit" disabled={saving || isDuplicate} className={`btn-primary flex-1 justify-center ${isDuplicate ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}>
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
-                  {saving ? 'Generating…' : isDuplicate ? 'Already Generated' : 'Generate Keys'}
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* ── Step 4: Review & Generate ── */}
+                {step === 4 && (
+                  <motion.div key="s4" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
+                    <div className="bg-brand-50/50 p-5 rounded-2xl border border-brand-100 space-y-3">
+                      <h3 className="text-sm font-bold text-surface-900">Review Configuration</h3>
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between"><span className="text-surface-500">Company</span><span className="font-bold text-surface-800">{form.company_name || '—'}</span></div>
+                        <div className="flex justify-between"><span className="text-surface-500">Application</span><span className="font-bold text-surface-800">{apps.find(a => a.id === form.app_id)?.app_name || '—'}</span></div>
+                        <div className="flex justify-between"><span className="text-surface-500">Expiry</span><span className="font-bold text-surface-800">{form.expiry_date}</span></div>
+                        <div className="flex justify-between"><span className="text-surface-500">Keys to Generate</span><span className="font-bold text-surface-800">{form.count}</span></div>
+                        <div className="flex justify-between"><span className="text-surface-500">Custom Fields</span><span className="font-bold text-surface-800">{form.labels.length} fields</span></div>
+                        <div className="h-px bg-brand-100" />
+                        <div className="flex justify-between items-center">
+                          <span className="text-surface-500">WhatsApp Channel</span>
+                          <span className="flex items-center gap-2">
+                            <span className="font-mono text-surface-800">{form.whatsapp_sender_channel || <span className="text-surface-400 italic">Not set</span>}</span>
+                            <VerifyBadge status={waTestStatus} />
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-surface-500">SMTP Config</span>
+                          <span className="flex items-center gap-2">
+                            <span className="font-bold text-surface-800">{form.smtp_enabled ? 'Enabled' : 'Disabled'}</span>
+                            {form.smtp_enabled && <VerifyBadge status={smtpTestStatus} />}
+                          </span>
+                        </div>
+                        <div className="flex justify-between"><span className="text-surface-500">Notifications</span><span className="font-bold text-surface-800 capitalize">{form.notification_type}</span></div>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                      <p className="text-[10px] text-amber-700 font-bold">⚠️ The raw activation key will be shown ONE TIME after generation. Make sure to save it immediately.</p>
+                    </div>
+                  </motion.div>
+                )}
+
+              </AnimatePresence>
+            </div>
+
+            {/* Footer Navigation */}
+            <div className="px-6 py-4 border-t border-white/30 flex gap-3">
+              {step > 1 ? (
+                <button type="button" onClick={() => setStep(s => s - 1)} className="btn-secondary flex items-center gap-2">
+                  <ChevronLeft className="w-4 h-4" /> Back
                 </button>
-              </div>
-            </form>
+              ) : (
+                <button type="button" onClick={handleClose} className="btn-secondary">Cancel</button>
+              )}
+              {step < 4 ? (
+                <button type="button"
+                  onClick={() => {
+                    if (step === 1 && (!form.app_id || !form.company_name)) {
+                      toast.error('Application and Company Name are required.')
+                      return
+                    }
+                    setStep(s => s + 1)
+                  }}
+                  className="btn-primary flex-1 justify-center flex items-center gap-2">
+                  Next <ChevronRight className="w-4 h-4" />
+                </button>
+              ) : (
+                <button type="button" onClick={handleSubmit} disabled={saving || isDuplicate}
+                  className={`btn-primary flex-1 justify-center flex items-center gap-2 ${ isDuplicate ? 'opacity-50 cursor-not-allowed grayscale' : '' }`}>
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                  {saving ? 'Generating…' : isDuplicate ? 'Already Generated' : 'Generate License Keys'}
+                </button>
+              )}
+            </div>
           </motion.div>
         </>
       )}
@@ -610,32 +719,52 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
   const [testingWhatsapp, setTestingWhatsapp] = useState(false)
   const [form, setForm] = useState<any>(null)
 
+  // Live verification state (overrides what came from DB after a test in this session)
+  const [waStatus, setWaStatus] = useState<VerifyStatus | undefined>(undefined)
+  const [emailStatus, setEmailStatus] = useState<VerifyStatus | undefined>(undefined)
+  // Test receiver fields
+  const [waTestPhone, setWaTestPhone] = useState('')
+  const [smtpTestEmail, setSmtpTestEmail] = useState('')
+
   useEffect(() => {
     if (isOpen && keyItem) {
       setForm({
         smtp_enabled: keyItem.smtp_enabled,
-        SMTP_HOST: (keyItem as any).SMTP_HOST || 'smtp.gmail.com',
-        SMTP_PORT: (keyItem as any).SMTP_PORT || 587,
-        SMTP_USER: (keyItem as any).SMTP_USER || '',
-        SMTP_PASS: '', // Never fill existing password
-        EMAILS_FROM_EMAIL: (keyItem as any).EMAILS_FROM_EMAIL || '',
-        EMAILS_FROM_NAME: (keyItem as any).EMAILS_FROM_NAME || '',
+        SMTP_HOST: (keyItem as any).smtp_host || 'smtp.gmail.com',
+        SMTP_PORT: (keyItem as any).smtp_port || 587,
+        SMTP_USER: (keyItem as any).smtp_user || '',
+        SMTP_PASS: '',
+        EMAILS_FROM_EMAIL: (keyItem as any).from_email || '',
+        EMAILS_FROM_NAME: (keyItem as any).from_name || '',
         whatsapp_sender_channel: keyItem.whatsapp_sender_channel || '',
-        notification_type: 'both' // Default fallback
+        notification_type: 'both'
       })
+      // Seed status from DB values
+      setWaStatus(keyItem.whatsapp_verified ? 'success' : keyItem.whatsapp_verified === false && keyItem.whatsapp_sender_channel ? 'failed' : undefined)
+      setEmailStatus(keyItem.email_verified ? 'success' : keyItem.email_verified === false && keyItem.smtp_enabled ? 'failed' : undefined)
+      setWaTestPhone('')
+      setSmtpTestEmail('')
     }
   }, [isOpen, keyItem])
 
   const handleTestSmtp = async () => {
     if (!keyItem) return
     setTestingSmtp(true)
+    setEmailStatus('testing')
     try {
-      const { data } = await api.post(`/keys/${keyItem.id}/test-smtp`)
+      const { data } = await api.post(`/apps/keys/${keyItem.id}/test-smtp`, {
+        test_receiver_email: smtpTestEmail || undefined
+      })
       if (data.status === 'success') {
-        toast.success("SMTP Configuration is VALID!")
+        setEmailStatus('success')
+        toast.success(data.message || 'Email configuration is VALID!')
       } else {
-        toast.error(data.reason || "SMTP connection failed.")
+        setEmailStatus('failed')
+        toast.error(data.reason || 'SMTP connection failed.')
       }
+    } catch (err: any) {
+      setEmailStatus('failed')
+      toast.error(err.response?.data?.detail || 'SMTP test failed.')
     } finally {
       setTestingSmtp(false)
     }
@@ -644,15 +773,21 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
   const handleTestWhatsapp = async () => {
     if (!keyItem) return
     setTestingWhatsapp(true)
+    setWaStatus('testing')
     try {
-      const { data } = await api.post(`/keys/${keyItem.id}/test-whatsapp`)
+      const { data } = await api.post(`/apps/keys/${keyItem.id}/test-whatsapp`, {
+        test_receiver_phone: waTestPhone || undefined
+      })
       if (data.status === 'success') {
-        toast.success("WhatsApp Sender is VALID!")
+        setWaStatus('success')
+        toast.success(data.message || 'WhatsApp channel is VALID!')
       } else {
-        toast.error(data.reason || "WhatsApp test failed.")
+        setWaStatus('failed')
+        toast.error(data.reason || 'WhatsApp test failed.')
       }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Test failed.")
+      setWaStatus('failed')
+      toast.error(err.response?.data?.detail || 'Test failed.')
     } finally {
       setTestingWhatsapp(false)
     }
@@ -665,13 +800,12 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
     try {
       const payload = { ...form }
       if (!payload.SMTP_PASS) delete payload.SMTP_PASS
-      
       await api.patch(`/apps/keys/${keyItem.id}`, payload)
-      toast.success("Settings updated successfully!")
+      toast.success('Settings updated successfully!')
       onSuccess()
       onClose()
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Update failed")
+      toast.error(err.response?.data?.detail || 'Update failed')
     } finally {
       setSaving(false)
     }
@@ -686,88 +820,111 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 z-40 bg-black/30" />
           <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} className="fixed inset-y-0 right-0 z-50 w-full max-w-md glass border-l border-white/20 flex flex-col">
             <div className="flex items-center justify-between px-6 py-5 border-b border-white/30">
-              <h2 className="text-lg font-bold text-surface-900">Communication Settings</h2>
+              <div>
+                <h2 className="text-lg font-bold text-surface-900">Communication Settings</h2>
+                <p className="text-[10px] text-surface-400 mt-0.5">{keyItem?.company_name}</p>
+              </div>
               <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-500"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
-               <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-bold text-surface-400 uppercase tracking-widest">WhatsApp Config</p>
-                  </div>
-                  <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-3">
-                      <div className="flex items-center gap-2">
-                        <input 
-                          value={form.whatsapp_sender_channel} 
-                          onChange={(e) => setForm({...form, whatsapp_sender_channel: e.target.value})}
-                          placeholder="919893224689:5" 
-                          className="form-input flex-1" 
-                        />
-                        <button type="button" onClick={handleTestWhatsapp} disabled={testingWhatsapp} className="btn-secondary px-3 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
-                          {testingWhatsapp ? <Loader2 className="w-3 h-3 animate-spin" /> : "Test WA"}
-                        </button>
-                      </div>
-                  </div>
-               </div>
 
-               <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-bold text-surface-400 uppercase tracking-widest font-bold">Email (SMTP) Config</p>
+              {/* ── WhatsApp Config ── */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-surface-600 uppercase tracking-widest">WhatsApp Config</p>
+                  <VerifyBadge status={waStatus} verifiedAt={keyItem?.whatsapp_verified_at} />
+                </div>
+                <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-surface-500 uppercase">Sender Channel ID</label>
+                    <input
+                      value={form.whatsapp_sender_channel}
+                      onChange={(e) => { setForm({ ...form, whatsapp_sender_channel: e.target.value }); setWaStatus(undefined) }}
+                      placeholder="91XXXXXXXXXX:ID"
+                      className="form-input mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-surface-500 uppercase">Test Receiver Phone <span className="text-surface-300 normal-case font-normal">(your number, not the customer's)</span></label>
+                    <div className="flex gap-2 mt-1">
+                      <input value={waTestPhone} onChange={(e) => setWaTestPhone(e.target.value)} placeholder="91XXXXXXXXXX" className="form-input flex-1 text-sm" />
+                      <button type="button" onClick={handleTestWhatsapp} disabled={testingWhatsapp} className="btn-secondary px-3 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap flex items-center gap-1.5">
+                        {testingWhatsapp ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+                        Test WhatsApp Connection
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-surface-400 italic">This will send a test message to verify configuration. Click 'Save Settings' to apply permanently.</p>
+                </div>
+              </div>
+
+              {/* ── Email SMTP Config ── */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs font-bold text-surface-600 uppercase tracking-widest">Email (SMTP) Config</p>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input type="checkbox" checked={form.smtp_enabled}
-                        onChange={(e) => setForm({ ...form, smtp_enabled: e.target.checked })}
+                        onChange={(e) => { setForm({ ...form, smtp_enabled: e.target.checked }); setEmailStatus(undefined) }}
                         className="sr-only peer" />
                       <div className="w-8 h-4 bg-surface-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:bg-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-brand-600"></div>
                     </label>
                   </div>
+                  {form.smtp_enabled && <VerifyBadge status={emailStatus} verifiedAt={keyItem?.email_verified_at} />}
+                </div>
 
-                  {form.smtp_enabled && (
-                    <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-4">
-                        <div className="grid grid-cols-3 gap-3">
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP_HOST</label>
-                            <input value={form.SMTP_HOST} onChange={(e) => setForm({...form, SMTP_HOST: e.target.value})} className="form-input text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP_PORT</label>
-                            <input type="number" value={form.SMTP_PORT} onChange={(e) => setForm({...form, SMTP_PORT: parseInt(e.target.value)})} className="form-input text-sm" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP_USER</label>
-                            <input value={form.SMTP_USER} onChange={(e) => setForm({...form, SMTP_USER: e.target.value})} className="form-input text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">
-                              SMTP_PASS {form.smtp_enabled && <span className="text-red-500">*</span>}
-                            </label>
-                            <input 
-                              type="password" 
-                              required={form.smtp_enabled}
-                              value={form.SMTP_PASS} 
-                              onChange={(e) => setForm({...form, SMTP_PASS: e.target.value})} 
-                              className={`form-input text-sm ${form.smtp_enabled && !form.SMTP_PASS ? 'border-red-200' : ''}`}
-                              placeholder={form.smtp_enabled ? "Required to save" : "••••••••"}
-                            />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">EMAILS_FROM_EMAIL</label>
-                            <input value={form.EMAILS_FROM_EMAIL} onChange={(e) => setForm({...form, EMAILS_FROM_EMAIL: e.target.value})} className="form-input text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-surface-400 uppercase">EMAILS_FROM_NAME</label>
-                            <input value={form.EMAILS_FROM_NAME} onChange={(e) => setForm({...form, EMAILS_FROM_NAME: e.target.value})} className="form-input text-sm" />
-                          </div>
-                        </div>
-                        <button type="button" onClick={handleTestSmtp} disabled={testingSmtp} className="btn-secondary w-full justify-center text-xs py-2">
-                           {testingSmtp ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
-                           {testingSmtp ? 'Testing...' : 'Test SMTP Connection'}
-                        </button>
+                {form.smtp_enabled && (
+                  <div className="bg-surface-50 p-4 rounded-2xl border border-surface-200 space-y-4">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="col-span-2">
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP Host</label>
+                        <input value={form.SMTP_HOST} onChange={(e) => { setForm({ ...form, SMTP_HOST: e.target.value }); setEmailStatus(undefined) }} className="form-input text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">Port</label>
+                        <input type="number" value={form.SMTP_PORT} onChange={(e) => setForm({ ...form, SMTP_PORT: parseInt(e.target.value) })} className="form-input text-sm" />
+                      </div>
                     </div>
-                  )}
-               </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">SMTP User</label>
+                        <input value={form.SMTP_USER} onChange={(e) => { setForm({ ...form, SMTP_USER: e.target.value }); setEmailStatus(undefined) }} className="form-input text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">
+                          SMTP Pass {form.smtp_enabled && <span className="text-red-500">*</span>}
+                        </label>
+                        <input type="password" required={form.smtp_enabled} value={form.SMTP_PASS}
+                          onChange={(e) => { setForm({ ...form, SMTP_PASS: e.target.value }); setEmailStatus(undefined) }}
+                          className={`form-input text-sm ${form.smtp_enabled && !form.SMTP_PASS ? 'border-red-200' : ''}`}
+                          placeholder={form.smtp_enabled ? 'Required to save' : '••••••••'}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">From Email</label>
+                        <input value={form.EMAILS_FROM_EMAIL} onChange={(e) => setForm({ ...form, EMAILS_FROM_EMAIL: e.target.value })} className="form-input text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-400 uppercase">From Name</label>
+                        <input value={form.EMAILS_FROM_NAME} onChange={(e) => setForm({ ...form, EMAILS_FROM_NAME: e.target.value })} className="form-input text-sm" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-surface-500 uppercase">Test Receiver Email <span className="text-surface-300 normal-case font-normal">(your email)</span></label>
+                      <div className="flex gap-2 mt-1">
+                        <input value={smtpTestEmail} onChange={(e) => setSmtpTestEmail(e.target.value)} placeholder="admin@yourcompany.com" className="form-input text-sm flex-1" />
+                        <button type="button" onClick={handleTestSmtp} disabled={testingSmtp} className="btn-secondary w-full justify-center text-[10px] font-bold flex items-center gap-1.5 px-3 whitespace-nowrap">
+                          {testingSmtp ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                          Test Email Connection
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-surface-400 italic">This will send a test message to verify configuration. Click 'Save Settings' to apply permanently.</p>
+                  </div>
+                )}
+              </div>
 
               <div className="pt-6 flex gap-3 sticky bottom-0 bg-white/50 backdrop-blur-md">
                 <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>

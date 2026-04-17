@@ -87,7 +87,7 @@ class AdminAppService:
         return await AdminRepo.update_app(db, db_app, update_data)
 
     @staticmethod
-    async def test_smtp(db: AsyncSession, key_id: uuid.UUID) -> dict:
+    async def test_smtp(db: AsyncSession, key_id: uuid.UUID, test_receiver_email: Optional[str] = None) -> dict:
         from app.services.email_provider import SMTPProvider
         from app.core.security import decrypt_password
         
@@ -98,8 +98,10 @@ class AdminAppService:
         if not key.smtp_user or not key.smtp_password:
             raise HTTPException(status_code=400, detail="SMTP User and Password must be configured before testing.")
         
+        # Use explicit test receiver or fall back to smtp_user
+        receiver = test_receiver_email or key.smtp_user
+        
         try:
-            # 1. Initialize Provider
             decrypted_pass = decrypt_password(key.smtp_password)
             provider = SMTPProvider(
                 host=key.smtp_host,
@@ -108,40 +110,52 @@ class AdminAppService:
                 password=decrypted_pass
             )
             
-            # 2. Attempt Test Send
             test_subject = f"SMTP Verification: {key.company_name}"
             test_body = f"Hello,\n\nThis is a test email to verify your SMTP configuration for {key.company_name}.\n\nIf you received this, your settings are VALID."
             
             res = await provider.send_email(
-                to_email=key.smtp_user, # Test send to self
+                to_email=receiver,
                 subject=test_subject,
                 body=test_body,
                 from_email=key.from_email or key.smtp_user,
                 from_name=key.from_name or "SMTP Tester"
             )
             
-            # 3. Update Status
             new_status = "VALID" if res["status"] == "success" else "INVALID"
-            await AdminRepo.update_key(db, key)
             key.smtp_status = new_status
+
+            if res["status"] == "success":
+                key.email_verified = True
+                key.email_verified_at = datetime.now(timezone.utc)
+            else:
+                key.email_verified = False
+                key.email_verified_at = None
+
+            await AdminRepo.update_key(db, key)
             await db.commit()
             
             if res["status"] == "success":
-                return {"status": "success", "message": "SMTP configuration verified successfully."}
+                return {"status": "success", "message": f"Test email delivered to {receiver}. Configuration is VALID."}
             else:
                 return {"status": "failed", "reason": res.get("reason", "Unknown failure")}
                 
         except Exception as e:
             logger.error(f"SMTP Test Error for Key {key_id}: {e}")
             key.smtp_status = "INVALID"
-            await db.commit()
+            key.email_verified = False
+            key.email_verified_at = None
+            try:
+                await db.commit()
+            except Exception:
+                pass
             return {"status": "failed", "reason": str(e)}
 
     @staticmethod
-    async def test_whatsapp(db: AsyncSession, key_id: uuid.UUID) -> dict:
+    async def test_whatsapp(db: AsyncSession, key_id: uuid.UUID, test_receiver_phone: Optional[str] = None) -> dict:
         """
         Attempts to send a test WhatsApp message using the ActivationKey's configured channel.
-        Sends the test message to the company's own mobile_number.
+        Sends the test message to test_receiver_phone (admin) or key.mobile_number as fallback.
+        On success, writes whatsapp_verified=True back to DB.
         """
         from app.services.notification_service import NotificationService
         
@@ -151,31 +165,48 @@ class AdminAppService:
         
         if not key.whatsapp_sender_channel:
             raise HTTPException(status_code=400, detail="WhatsApp Sender Channel must be configured before testing.")
-            
-        if not key.mobile_number:
-            raise HTTPException(status_code=400, detail="Company Mobile Number must be configured to receive the test message.")
+        
+        # Use explicit test receiver or fall back to company's mobile_number
+        receiver = test_receiver_phone or key.mobile_number
+        if not receiver:
+            raise HTTPException(status_code=400, detail="Provide a 'test_receiver_phone' or configure the company's Mobile Number first.")
             
         try:
             test_data = {
                 "id": str(key.id),
                 "company_name": key.company_name,
-                "raw_activation_key": "WB-TEST-XXXX-XXXX"
+                "message": f"✅ WhatsApp sender verification for {key.company_name}. Channel {key.whatsapp_sender_channel} is working correctly."
             }
             
             res = await NotificationService._send_whatsapp_safe(
-                phone=key.mobile_number,
+                phone=receiver,
                 key_data=test_data,
                 app_name="System Verification",
                 sender_channel=key.whatsapp_sender_channel
             )
             
             if res in ["success", "sent"]:
-                return {"status": "success", "message": "WhatsApp sender verified successfully."}
+                key.whatsapp_verified = True
+                key.whatsapp_verified_at = datetime.now(timezone.utc)
+                await AdminRepo.update_key(db, key)
+                await db.commit()
+                return {"status": "success", "message": f"Test message delivered to {receiver}. Channel is VALID."}
             else:
+                key.whatsapp_verified = False
+                key.whatsapp_verified_at = None
+                await AdminRepo.update_key(db, key)
+                await db.commit()
                 return {"status": "failed", "reason": res}
                 
         except Exception as e:
             logger.error(f"WhatsApp Test Error for Key {key_id}: {e}")
+            key.whatsapp_verified = False
+            key.whatsapp_verified_at = None
+            try:
+                await AdminRepo.update_key(db, key)
+                await db.commit()
+            except Exception:
+                pass
             return {"status": "failed", "reason": str(e)}
 
     # ─────────────────────────────────────────
@@ -305,6 +336,20 @@ class AdminAppService:
 
         update_data = update_in.model_dump(exclude_unset=True)
 
+        # ── Verification Reset Logic ─────────────────────────────────────────
+        # If WhatsApp channel changes, mark it as unverified (stale verification guard)
+        WA_FIELDS = {"whatsapp_sender_channel"}
+        SMTP_FIELDS = {"smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_enabled"}
+
+        if WA_FIELDS & update_data.keys():
+            update_data["whatsapp_verified"] = False
+            update_data["whatsapp_verified_at"] = None
+
+        if SMTP_FIELDS & update_data.keys():
+            update_data["email_verified"] = False
+            update_data["email_verified_at"] = None
+        # ────────────────────────────────────────────────────────────────────
+
         # Versioning Trigger: If labels change, increment version and create snapshot
         if "labels" in update_data and update_data["labels"] != key.labels:
             key.current_version += 1
@@ -363,6 +408,74 @@ class AdminAppService:
             )
             
         return updated_key
+
+    @staticmethod
+    async def test_whatsapp_stateless(sender_channel: str, test_receiver_phone: str) -> dict:
+        """
+        Stateless WhatsApp test — no key_id required.
+        Used in the pre-generation wizard (Step 3) where no license exists yet.
+        Does NOT update any DB record.
+        """
+        from app.services.whatsapp_service import send_whatsapp
+        
+        if not sender_channel:
+            return {"status": "failed", "reason": "WhatsApp Sender Channel is required."}
+        if not test_receiver_phone:
+            return {"status": "failed", "reason": "A test receiver phone number is required."}
+
+        try:
+            result = await send_whatsapp(
+                phone=test_receiver_phone,
+                message="✅ WhatsApp sender connectivity test. This confirms your channel is working correctly.",
+                sender_channel=sender_channel
+            )
+            if result.get("status") == "success":
+                return {"status": "success", "message": f"Test message delivered to {test_receiver_phone}."}
+            else:
+                return {"status": "failed", "reason": result.get("message", "Provider rejected the message.")}
+        except Exception as e:
+            logger.error(f"Stateless WA test error: {e}")
+            return {"status": "failed", "reason": str(e)}
+
+    @staticmethod
+    async def test_smtp_stateless(
+        smtp_host: str, smtp_port: int, smtp_user: str, smtp_password: str,
+        from_email: Optional[str], from_name: Optional[str],
+        test_receiver_email: str
+    ) -> dict:
+        """
+        Stateless SMTP test — no key_id required.
+        Used in the pre-generation wizard (Step 3) where no license exists yet.
+        Does NOT update any DB record.
+        """
+        from app.services.email_provider import SMTPProvider
+        
+        if not all([smtp_host, smtp_port, smtp_user, smtp_password]):
+            return {"status": "failed", "reason": "SMTP Host, Port, User, and Password are all required."}
+        if not test_receiver_email:
+            return {"status": "failed", "reason": "A test receiver email is required."}
+
+        try:
+            provider = SMTPProvider(
+                host=smtp_host,
+                port=smtp_port,
+                user=smtp_user,
+                password=smtp_password
+            )
+            res = await provider.send_email(
+                to_email=test_receiver_email,
+                subject="SMTP Connectivity Test",
+                body="This is a test email to verify your SMTP configuration. If you received this, your settings are working correctly.",
+                from_email=from_email or smtp_user,
+                from_name=from_name or "System Test"
+            )
+            if res.get("status") == "success":
+                return {"status": "success", "message": f"Test email delivered to {test_receiver_email}."}
+            else:
+                return {"status": "failed", "reason": res.get("reason", "Unknown failure")}
+        except Exception as e:
+            logger.error(f"Stateless SMTP test error: {e}")
+            return {"status": "failed", "reason": str(e)}
 
     @staticmethod
     async def rotate_token(db: AsyncSession, key_id: uuid.UUID):

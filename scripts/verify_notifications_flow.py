@@ -10,6 +10,7 @@ from app.models.admin_models import App, ActivationKey, ActivationKeyHistory, Ad
 from sqlalchemy import select, delete
 from app.services.admin_app_service import AdminAppService
 from app.services.notification_service import NotificationService
+from app.repositories.admin_repo import AdminRepo
 from app.schemas.admin_schemas import AppCreate
 from app.core.rate_limiter import rate_limiter
 from app.config.settings import settings

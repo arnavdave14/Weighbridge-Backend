@@ -180,6 +180,7 @@ async def whatsapp_send_test(
     vehicle: str = Form("MP09XL1726"),
     gross_weight: float = Form(35000.00),
     tare_weight: float = Form(12000.00),
+    sender_channel: Optional[str] = Form(None), # Made dynamic
     pdf_file: Optional[UploadFile] = File(None)
 ):
     """
@@ -200,9 +201,12 @@ async def whatsapp_send_test(
         payload["pdf_content"] = await pdf_file.read()
         payload["filename"] = pdf_file.filename
 
-    # 3. Resolve Sender Channel (Optional form field or default from testing)
-    # In a full multi-tenant test, we'd pull this from the session or a passed parameter
-    sender_channel = "919407184405:30" # Default testing channel
+    # 3. Resolve Sender Channel
+    if not sender_channel:
+        raise HTTPException(
+            status_code=400, 
+            detail="No WhatsApp sender channel provided or configured for this tenant."
+        )
     
     # 4. Send via Stateless Service
     return await send_whatsapp(

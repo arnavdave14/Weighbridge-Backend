@@ -107,8 +107,14 @@ class ActivationKey(AdminBase):
     smtp_status = Column(String, default="UNTESTED", nullable=False) # VALID | INVALID | UNTESTED
 
     # WhatsApp Overrides
-    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "919893224689:5"
+    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "Number:Channel-ID"
     email_sender = Column(String, nullable=True)            # Optional display name override
+
+    # Verification Status (reset whenever config changes)
+    whatsapp_verified = Column(Boolean, default=False, nullable=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    whatsapp_verified_at = Column(DateTime(timezone=True), nullable=True)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
 
     # --- Bill / Receipt Configuration ---
     labels = Column(JSON, nullable=True, server_default="[]")  # Dynamic label array

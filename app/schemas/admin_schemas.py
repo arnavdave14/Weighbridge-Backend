@@ -109,7 +109,7 @@ class ActivationKeyCreate(BaseModel):
     @classmethod
     def validate_wa_channel(cls, v):
         if not v: return v
-        # Format: <number>:<id> e.g. 919893224689:5
+        # Format: <number>:<id>
         if ":" not in v:
             raise ValueError("WhatsApp channel must be in format 'number:id'.")
         parts = v.split(":")
@@ -205,6 +205,26 @@ class ActivationKeyUpdate(BaseModel):
         return v
 
 
+class TestConnectionRequest(BaseModel):
+    """
+    Body for pre-generation stateless tests or post-generation keyed tests.
+    test_receiver_phone: where the test WA message goes (admin's own number).
+    test_receiver_email: where the test email goes (admin's own email).
+    Optional channel/smtp_* let the stateless endpoints receive config inline.
+    """
+    test_receiver_phone: Optional[str] = None
+    test_receiver_email: Optional[str] = None
+
+    # For stateless (pre-generation) tests — inline config
+    whatsapp_sender_channel: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_email: Optional[str] = None
+    from_name: Optional[str] = None
+
+
 class ActivationKeyRead(BaseModel):
     id: UUID4
     app_id: UUID4
@@ -238,6 +258,13 @@ class ActivationKeyRead(BaseModel):
     smtp_status: str
     whatsapp_sender_channel: Optional[str]
     email_sender: Optional[str]
+
+    # Verification Status
+    whatsapp_verified: bool = False
+    email_verified: bool = False
+    whatsapp_verified_at: Optional[datetime] = None
+    email_verified_at: Optional[datetime] = None
+    current_version: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

@@ -8,7 +8,7 @@ from app.api.admin_deps import get_current_admin
 from app.schemas.admin_schemas import (
     AppCreate, AppRead, AppUpdate,
     ActivationKeyCreate, ActivationKeyRead, ActivationKeyUpdate,
-    DashboardStats
+    DashboardStats, TestConnectionRequest
 )
 from app.services.admin_app_service import AdminAppService
 from app.repositories.admin_repo import AdminRepo
@@ -205,27 +205,68 @@ async def update_key_details(
 @router.post("/keys/{key_id}/test-smtp")
 async def test_key_smtp(
     key_id: uuid.UUID,
+    body: TestConnectionRequest = TestConnectionRequest(),
     db: AsyncSession = Depends(get_remote_db),
     current_admin: AdminUser = Depends(get_current_admin)
 ):
     """
-    Attempts to send a test email using the ActivationKey's configured SMTP.
-    Updates smtp_status to VALID or INVALID based on result.
+    Sends a test email using the key's configured SMTP.
+    Optional body.test_receiver_email sets the destination (admin's own address).
+    On success, writes email_verified=True to DB.
     """
-    return await AdminAppService.test_smtp(db, key_id)
+    return await AdminAppService.test_smtp(db, key_id, test_receiver_email=body.test_receiver_email)
 
 
 @router.post("/keys/{key_id}/test-whatsapp")
 async def test_key_whatsapp(
     key_id: uuid.UUID,
+    body: TestConnectionRequest = TestConnectionRequest(),
     db: AsyncSession = Depends(get_remote_db),
     current_admin: AdminUser = Depends(get_current_admin)
 ):
     """
-    Attempts to send a test WhatsApp message using the ActivationKey's configured channel.
-    Sends the test message to the company's mobile_number.
+    Sends a test WhatsApp message using the key's configured channel.
+    Optional body.test_receiver_phone sets the destination (admin's own number).
+    On success, writes whatsapp_verified=True to DB.
     """
-    return await AdminAppService.test_whatsapp(db, key_id)
+    return await AdminAppService.test_whatsapp(db, key_id, test_receiver_phone=body.test_receiver_phone)
+
+
+@router.post("/comms/test-whatsapp")
+async def test_whatsapp_stateless(
+    body: TestConnectionRequest,
+    current_admin: AdminUser = Depends(get_current_admin)
+):
+    """
+    Stateless WhatsApp connectivity test — no key_id required.
+    Used in the pre-generation wizard. Does NOT persist anything.
+    Requires: body.whatsapp_sender_channel + body.test_receiver_phone
+    """
+    return await AdminAppService.test_whatsapp_stateless(
+        sender_channel=body.whatsapp_sender_channel,
+        test_receiver_phone=body.test_receiver_phone
+    )
+
+
+@router.post("/comms/test-smtp")
+async def test_smtp_stateless(
+    body: TestConnectionRequest,
+    current_admin: AdminUser = Depends(get_current_admin)
+):
+    """
+    Stateless SMTP connectivity test — no key_id required.
+    Used in the pre-generation wizard. Does NOT persist anything.
+    Requires: SMTP fields + body.test_receiver_email
+    """
+    return await AdminAppService.test_smtp_stateless(
+        smtp_host=body.smtp_host,
+        smtp_port=body.smtp_port,
+        smtp_user=body.smtp_user,
+        smtp_password=body.smtp_password,
+        from_email=body.from_email,
+        from_name=body.from_name,
+        test_receiver_email=body.test_receiver_email
+    )
 
 
 @router.delete("/keys/{key_uuid}/revoke")
