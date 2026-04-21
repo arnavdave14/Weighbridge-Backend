@@ -24,6 +24,15 @@ class Settings:
     SQLITE_PATH: str = os.getenv("SQLITE_PATH", "./data/app.db")
     POSTGRES_URL: str = os.getenv("POSTGRES_URL")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # ── Simple LAN / Offline switch ──────────────────────────────────────────
+    # USE_POSTGRES=false → single-machine offline (SQLite is primary db)
+    # USE_POSTGRES=true  → LAN multi-user (PostgreSQL is primary db)
+    # When set, it overrides DB_MODE: true→'postgres', false stays as-is.
+    USE_POSTGRES: bool = os.getenv("USE_POSTGRES", "false").lower() == "true"
+
+    # Default server port exposed to admin panel for license pre-fill.
+    SERVER_PORT: int = int(os.getenv("SERVER_PORT", "8000"))
     
     # SECURITY & SECRETS — resolved via keyring → env var → default (see app/security/key_loader.py)
     # These are evaluated once at import time so they remain constant for the process lifetime.
@@ -105,14 +114,27 @@ class Settings:
             keyring_available = False
 
         print("--- [BOOT] SYSTEM CONFIGURATION ---")
-        print(f"  ENVIRONMENT : {self.ENVIRONMENT}")
-        print(f"  DB_MODE     : {self.DB_MODE}")
-        print(f"  SQLITE      : {self.SQLITE_PATH}")
-        print(f"  POSTGRES    : {'Configured' if pg_url else 'Not Configured'}")
-        print(f"  KEYRING     : {'✅ OS Keyring active' if keyring_available else '⚠️  Env-var fallback (upgrade to keyring for production)'}")
-        print(f"  DB_ENCRYPT  : ✅ SQLCipher PRAGMA active (aiosqlite event hook)")
-        print(f"  LOCAL_AUTH  : ✅ X-Local-Secret middleware enabled")
+        print(f"  ENVIRONMENT   : {self.ENVIRONMENT}")
+        print(f"  USE_POSTGRES  : {self.USE_POSTGRES} ({'LAN multi-user mode' if self.USE_POSTGRES else 'Single-machine offline mode'})")
+        print(f"  DB_MODE       : {self.DB_MODE} (effective: {self.effective_db_mode})")
+        print(f"  SERVER_PORT   : {self.SERVER_PORT}")
+        print(f"  SQLITE        : {self.SQLITE_PATH}")
+        print(f"  POSTGRES      : {'Configured' if pg_url else 'Not Configured'}")
+        print(f"  KEYRING       : {'✅ OS Keyring active' if keyring_available else '⚠️  Env-var fallback (upgrade to keyring for production)'}")
+        print(f"  DB_ENCRYPT    : ✅ SQLCipher PRAGMA active (aiosqlite event hook)")
+        print(f"  LOCAL_AUTH    : ✅ X-Local-Secret middleware enabled")
         print("-----------------------------------")
+
+    @property
+    def effective_db_mode(self) -> str:
+        """
+        Resolves the effective DB mode, giving USE_POSTGRES precedence.
+          USE_POSTGRES=true  → 'postgres'
+          USE_POSTGRES=false → uses DB_MODE as-is (default: 'dual')
+        """
+        if self.USE_POSTGRES:
+            return "postgres"
+        return self.DB_MODE
 
     @property
     def sqlite_url(self) -> str:

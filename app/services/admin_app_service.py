@@ -267,7 +267,7 @@ class AdminAppService:
                     bill_header_2=key_in.bill_header_2,
                     bill_header_3=key_in.bill_header_3,
                     bill_footer=key_in.bill_footer,
-                    
+
                     # Communication Settings
                     smtp_enabled=key_in.smtp_enabled,
                     smtp_host=key_in.smtp_host,
@@ -277,7 +277,11 @@ class AdminAppService:
                     from_email=key_in.from_email,
                     from_name=key_in.from_name,
                     whatsapp_sender_channel=key_in.whatsapp_sender_channel,
-                    email_sender=key_in.email_sender
+                    email_sender=key_in.email_sender,
+
+                    # Server / LAN Connection Config
+                    server_ip=key_in.server_ip,
+                    port=key_in.port if key_in.port is not None else 8000,
                 )
 
                 # Create audit history for generation
@@ -312,7 +316,10 @@ class AdminAppService:
                     "message": key_in.message,
                     "subject": key_in.subject,
                     "body": key_in.body,
-                    "app_id_str": app.app_id
+                    "app_id_str": app.app_id,
+                    # Server / LAN Connection Config
+                    "server_ip": db_key.server_ip,
+                    "port": db_key.port,
                 })
             except Exception as e:
                 if isinstance(e, IntegrityError):
@@ -676,6 +683,11 @@ class AdminAppService:
             "phone": matched_key.phone,
             "mobile_number": matched_key.mobile_number,
             "whatsapp_number": matched_key.whatsapp_number,
+            # LAN Server Connection Config
+            # The device stores these and uses them to build its API base URL:
+            #   http://{server_ip}:{port}
+            "server_ip": matched_key.server_ip,
+            "port": matched_key.port,
         }
 
     # ─────────────────────────────────────────

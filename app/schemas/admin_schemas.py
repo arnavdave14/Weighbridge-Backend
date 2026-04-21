@@ -82,11 +82,15 @@ class ActivationKeyCreate(BaseModel):
     smtp_password: Optional[str] = Field(None, alias="SMTP_PASS")
     from_email: Optional[str] = Field(None, alias="EMAILS_FROM_EMAIL")
     from_name: Optional[str] = Field(None, alias="EMAILS_FROM_NAME")
-    
+
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
 
-    model_config = ConfigDict(populate_by_name=True)
+    # --- Server / LAN Connection Config ---
+    # server_ip is auto-detected by the backend and pre-filled in the Admin Panel.
+    # Port defaults to 8000, must be in range 1024–65535.
+    server_ip: Optional[str] = None
+    port: Optional[int] = Field(8000)
 
     @field_validator("smtp_host")
     @classmethod
@@ -135,6 +139,14 @@ class ActivationKeyCreate(BaseModel):
             raise ValueError("SMTP User must be a valid email address.")
         return v
 
+    @field_validator("port")
+    @classmethod
+    def validate_server_port(cls, v):
+        if v is not None and not (1024 <= v <= 65535):
+            raise ValueError("Server port must be between 1024 and 65535.")
+        return v
+
+    model_config = ConfigDict(populate_by_name=True)
 
 class ActivationKeyUpdate(BaseModel):
     """Update company details, billing config, expiry, or status."""
@@ -166,6 +178,10 @@ class ActivationKeyUpdate(BaseModel):
     whatsapp_sender_channel: Optional[str] = None
     email_sender: Optional[str] = None
 
+    # Server / LAN Connection Config Update
+    server_ip: Optional[str] = None
+    port: Optional[int] = None
+
     model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("smtp_host")
@@ -182,6 +198,13 @@ class ActivationKeyUpdate(BaseModel):
     def validate_smtp_port(cls, v):
         if v is not None and (v < 1 or v > 65535):
             raise ValueError("SMTP port must be between 1 and 65535.")
+        return v
+
+    @field_validator("port")
+    @classmethod
+    def validate_server_port(cls, v):
+        if v is not None and not (1024 <= v <= 65535):
+            raise ValueError("Server port must be between 1024 and 65535.")
         return v
 
     @field_validator("whatsapp_sender_channel")
@@ -233,6 +256,7 @@ class ActivationKeyRead(BaseModel):
     status: str
     expiry_date: datetime
     created_at: datetime
+    updated_at: Optional[datetime] = None
     logo_url: Optional[str] = None
     signup_image_url: Optional[str] = None
     email: Optional[str] = None
@@ -265,6 +289,10 @@ class ActivationKeyRead(BaseModel):
     whatsapp_verified_at: Optional[datetime] = None
     email_verified_at: Optional[datetime] = None
     current_version: Optional[int] = None
+
+    # Server / LAN Connection Config
+    server_ip: Optional[str] = None
+    port: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -363,6 +391,38 @@ class HardwareActivationResponse(BaseModel):
     phone: Optional[str]
     mobile_number: Optional[str]
     whatsapp_number: Optional[str]
+    # LAN Server Connection Config — device uses this for all subsequent API calls
+    server_ip: Optional[str] = None
+    port: Optional[int] = None
+
+
+# ─────────────────────────────────────────────
+class ServerConfigRead(BaseModel):
+    """
+    Shape returned by GET /settings.
+    restart_required is True when the saved port differs from the
+    currently running SERVER_PORT — meaning a manual restart is needed
+    for the port change to take effect.
+    """
+    server_ip: Optional[str] = None
+    port: int = 8000
+    restart_required: bool = False
+
+
+class ServerConfigUpdate(BaseModel):
+    """
+    Body accepted by PUT /settings.
+    Only the fields provided are updated (partial update).
+    """
+    server_ip: Optional[str] = None
+    port: Optional[int] = None
+
+    @field_validator("port")
+    @classmethod
+    def validate_server_port(cls, v):
+        if v is not None and not (1024 <= v <= 65535):
+            raise ValueError("Server port must be between 1024 and 65535.")
+        return v
 
 
 # ─────────────────────────────────────────────

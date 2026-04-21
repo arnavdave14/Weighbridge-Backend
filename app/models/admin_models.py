@@ -123,9 +123,18 @@ class ActivationKey(AdminBase):
     bill_header_3 = Column(String, nullable=True)
     bill_footer = Column(String, nullable=True)
 
+    # --- Server / LAN Connection Config ---
+    # Set during license creation; returned to the device on activation so it
+    # knows which backend to connect to on the LAN.
+    server_ip = Column(String, nullable=True)          # e.g. "192.168.1.10"
+    port = Column(Integer, nullable=True, default=8000) # Must be 1024–65535
+
     # --- Notification Tracking ---
     whatsapp_status = Column(String, default="pending", nullable=False) # pending | sent | failed | skipped
     email_status = Column(String, default="pending", nullable=False)    # pending | sent | failed | skipped
+
+    # --- Timestamps ---
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
     app = relationship("App", back_populates="keys")

@@ -1,7 +1,11 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routes import receipts, auth, bhel, sync, admin_apps, activation, notifications, admin_auth, admin_branding, admin_dlq, admin_receipts, admin_documents, employee_auth, integrity
+from app.routes import (
+    receipts, auth, bhel, sync, admin_apps, activation, notifications,
+    admin_auth, admin_branding, admin_dlq, admin_receipts, admin_documents,
+    employee_auth, integrity, settings as settings_router
+)
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.database.sqlite import local_engine
 from app.database.postgres import remote_engine
@@ -83,7 +87,7 @@ async def lifespan(app: "FastAPI"):
                 asyncio.create_task(full_audit_task())
 
     # Start the background synchronization task ONLY in development mode
-    if settings.ENVIRONMENT == "development" and settings.DB_MODE in ["dual", "postgres"]:
+    if settings.ENVIRONMENT == "development" and settings.effective_db_mode in ["dual", "postgres"]:
         asyncio.create_task(run_sync_worker_loop())
     
     # Initialize Remote Database tables if available
@@ -191,6 +195,9 @@ app.include_router(employee_auth.router)
 
 # Integrity Routes
 app.include_router(integrity.router)
+
+# Settings: LAN server IP + port configuration
+app.include_router(settings_router.router)
 
 # Static Files
 app.mount("/static", StaticFiles(directory="static"), name="static")
