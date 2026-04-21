@@ -33,10 +33,11 @@ from app.models.admin_models import ActivationKey, AdminUser
 from app.schemas.admin_schemas import ServerConfigRead, ServerConfigUpdate
 from app.utils.network import detect_server_ip
 from app.config.settings import settings
+import httpx
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/settings", tags=["Settings"])
+router = APIRouter(prefix="/admin/settings", tags=["Settings"])
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -184,3 +185,38 @@ async def update_settings(
         port=saved_port,
         restart_required=restart_required,
     )
+
+
+@router.get(
+    "/test-connection",
+    summary="Test connectivity to a generic server_ip:port/health",
+    response_model=dict,
+)
+async def test_connection(
+    ip: str,
+    port: int,
+    _: AdminUser = Depends(get_current_admin),
+):
+    """
+    Attempts to probe a target server's /health endpoint from the backend.
+    Used by the Admin Panel to verify LAN settings without hitting CORS issues.
+    """
+    target_url = f"http://{ip}:{port}/health"
+    logger.info("Settings: Testing connection to %s", target_url)
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(target_url)
+            if resp.status_code == 200:
+                return {"reachable": True, "message": "Connection successful!"}
+            else:
+                return {
+                    "reachable": False,
+                    "message": f"Server reached but returned status {resp.status_code}",
+                }
+    except httpx.ConnectError:
+        return {"reachable": False, "message": "Connection failed: Server is unreachable."}
+    except httpx.TimeoutException:
+        return {"reachable": False, "message": "Connection failed: Request timed out."}
+    except Exception as e:
+        return {"reachable": False, "message": f"Connection failed: {str(e)}"}

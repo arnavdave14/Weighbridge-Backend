@@ -146,6 +146,22 @@ class ActivationKeyCreate(BaseModel):
             raise ValueError("Server port must be between 1024 and 65535.")
         return v
 
+    @field_validator("server_ip")
+    @classmethod
+    def validate_server_ip(cls, v):
+        if not v:
+            return v
+        if v.lower() == "localhost":
+            return v
+        
+        # Validate IPv4/IPv6 using ipaddress
+        import ipaddress
+        try:
+            ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            raise ValueError("Invalid Server IP format. Expected IPv4 (e.g. 192.168.1.10) or 'localhost'.")
+
     model_config = ConfigDict(populate_by_name=True)
 
 class ActivationKeyUpdate(BaseModel):
@@ -206,6 +222,21 @@ class ActivationKeyUpdate(BaseModel):
         if v is not None and not (1024 <= v <= 65535):
             raise ValueError("Server port must be between 1024 and 65535.")
         return v
+
+    @field_validator("server_ip")
+    @classmethod
+    def validate_server_ip(cls, v):
+        if not v:
+            return v
+        if v.lower() == "localhost":
+            return v
+        
+        import ipaddress
+        try:
+            ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            raise ValueError("Invalid Server IP format. Expected IPv4 (e.g. 192.168.1.10) or 'localhost'.")
 
     @field_validator("whatsapp_sender_channel")
     @classmethod

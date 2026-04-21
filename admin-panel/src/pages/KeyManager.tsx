@@ -43,6 +43,10 @@ interface Key {
   email_verified?: boolean;
   whatsapp_verified_at?: string | null;
   email_verified_at?: string | null;
+
+  // Server / LAN Connection Config
+  server_ip?: string;
+  port?: number;
 }
 
 // --- Sub-components ---
@@ -306,6 +310,18 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   const [smtpTestStatus, setSmtpTestStatus] = useState<VerifyStatus>('idle')
   const [smtpTestEmail, setSmtpTestEmail] = useState('')
 
+  // LAN/Server test state
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null)
+  const [ipDetected, setIpDetected] = useState(false)
+
+  const isValidIP = (ip: string) => {
+    if (!ip) return false
+    if (ip.toLowerCase() === 'localhost') return true
+    const ipv4Regex = /^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.){3}(25[0-5]|(2[0-4]|1\d|[1-9]|)\d)$/
+    return ipv4Regex.test(ip)
+  }
+
   const initialForm = {
     app_id: '', company_name: '',
     expiry_date: format(new Date(new Date().setFullYear(new Date().getFullYear() + 1)), 'yyyy-MM-dd'),
@@ -318,9 +334,50 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     SMTP_HOST: 'smtp.gmail.com', SMTP_PORT: 587,
     SMTP_USER: '', SMTP_PASS: '',
     EMAILS_FROM_EMAIL: '', EMAILS_FROM_NAME: '',
-    whatsapp_sender_channel: ''
+    whatsapp_sender_channel: '',
+    server_ip: '',
+    port: 8000 as number | undefined
   }
   const [form, setForm] = useState(initialForm)
+
+  const handleDetectIP = async () => {
+    try {
+      const { data } = await api.get('/settings/detect-ip')
+      setForm(f => ({ ...f, server_ip: data.server_ip, port: data.port }))
+      setIpDetected(true)
+      setTimeout(() => setIpDetected(false), 3000)
+      toast.success('Local Server IP detected!')
+    } catch (err: any) {
+      toast.error('Could not detect server IP automatically.')
+    }
+  }
+
+  const handleTestConnection = async () => {
+    const { server_ip, port } = form
+    if (!isValidIP(server_ip)) {
+      toast.error('Invalid IP address format.')
+      return
+    }
+    setTestingConnection(true)
+    setTestResult(null)
+    try {
+      const { data } = await api.get(`/settings/test-connection?ip=${server_ip}&port=${port}`)
+      setTestResult(data.reachable ? 'success' : 'failed')
+      if (data.reachable) toast.success(data.message)
+      else toast.error(data.message)
+    } catch (err: any) {
+      setTestResult('failed')
+      toast.error('Failed to perform connection test.')
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  const copyServerURL = (ip: string, port: number) => {
+    const url = `http://${ip}:${port}`
+    navigator.clipboard.writeText(url)
+    toast.success('Server URL copied to clipboard!')
+  }
 
   const resetAll = () => {
     setStep(1); setForm(initialForm)
@@ -379,6 +436,9 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
 
   const handleSubmit = async () => {
     if (!form.app_id) { toast.error('Select an application first.'); return }
+    if (!isValidIP(form.server_ip)) { toast.error('Valid Server IP (IPv4 or localhost) is required.'); return }
+    if (!form.port || form.port < 1024 || form.port > 65535) { toast.error('Server Port must be between 1024 and 65535.'); return }
+
     setSaving(true)
     try {
       const payload = { ...form, expiry_date: new Date(form.expiry_date).toISOString() }
@@ -504,6 +564,40 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                       <div className="grid grid-cols-2 gap-4">
                         <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Expiry Date *</label><input type="date" required value={form.expiry_date} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} className="form-input" /></div>
                         <div><label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Key Count</label><input type="number" min={1} max={50} value={form.count} onChange={(e) => setForm({ ...form, count: parseInt(e.target.value) })} className="form-input" /></div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">LAN / Server Configuration</h3>
+                      <div className="h-px bg-surface-100 w-full mb-3" />
+                      <div className="bg-brand-50/30 p-4 rounded-2xl border border-brand-100 space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                               <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Server IP (LAN)</label>
+                               <div className="flex items-center gap-2">
+                                  {ipDetected && <span className="text-[9px] font-bold text-emerald-600 flex items-center gap-0.5"><Check className="w-2.5 h-2.5" /> detected</span>}
+                                  <button type="button" onClick={handleDetectIP} className="text-[9px] font-bold text-brand-600 hover:underline">Auto-Detect</button>
+                               </div>
+                            </div>
+                            <input value={form.server_ip} onChange={(e) => setForm({ ...form, server_ip: e.target.value })} placeholder="192.168.1.XX" className="form-input text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-surface-500 uppercase ml-1 block mb-1">Server Port</label>
+                            <input type="number" min={1024} max={65535} value={form.port} onChange={(e) => setForm({ ...form, port: parseInt(e.target.value) || undefined })} className="form-input text-sm" />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-brand-100/50">
+                          <div className="flex items-center gap-3">
+                            <button type="button" onClick={() => copyServerURL(form.server_ip, form.port || 8000)} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                               <Copy className="w-3 h-3" /> Copy URL
+                            </button>
+                            <button type="button" onClick={handleTestConnection} disabled={testingConnection} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                               {testingConnection ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+                               {testResult === 'success' ? '✔ Connected' : testResult === 'failed' ? '✖ Failed' : 'Test Connection'}
+                            </button>
+                          </div>
+                          <p className="text-[9px] text-surface-500 italic">Backend must be running on this IP and port.</p>
+                        </div>
                       </div>
                     </div>
                   </motion.div>
@@ -632,7 +726,15 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                             {form.smtp_enabled && <VerifyBadge status={smtpTestStatus} />}
                           </span>
                         </div>
-                        <div className="flex justify-between"><span className="text-surface-500">Notifications</span><span className="font-bold text-surface-800 capitalize">{form.notification_type}</span></div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-surface-500">Notifications</span>
+                          <span className="font-bold text-surface-800 capitalize">{form.notification_type}</span>
+                        </div>
+                        <div className="h-px bg-brand-100" />
+                        <div className="flex justify-between">
+                          <span className="text-surface-500">Server Address</span>
+                          <span className="font-mono text-xs font-bold text-brand-700">http://{form.server_ip || '—'}:{form.port}</span>
+                        </div>
                       </div>
                     </div>
 
@@ -726,6 +828,52 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
   const [waTestPhone, setWaTestPhone] = useState('')
   const [smtpTestEmail, setSmtpTestEmail] = useState('')
 
+  // LAN/Server test state
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null)
+  const [ipDetected, setIpDetected] = useState(false)
+  const [runningPort, setRunningPort] = useState<number | null>(null)
+
+  const isValidIP = (ip: string) => {
+    if (!ip) return false
+    if (ip.toLowerCase() === 'localhost') return true
+    const ipv4Regex = /^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.){3}(25[0-5]|(2[0-4]|1\d|[1-9]|)\d)$/
+    return ipv4Regex.test(ip)
+  }
+
+  const handleTestConnection = async () => {
+    const { server_ip, port } = form
+    if (!isValidIP(server_ip)) {
+      toast.error('Invalid IP address format.')
+      return
+    }
+    setTestingConnection(true)
+    setTestResult(null)
+    try {
+      const { data } = await api.get(`/settings/test-connection?ip=${server_ip}&port=${port}`)
+      setTestResult(data.reachable ? 'success' : 'failed')
+      if (data.reachable) toast.success(data.message)
+      else toast.error(data.message)
+    } catch (err: any) {
+      setTestResult('failed')
+      toast.error('Failed to perform connection test.')
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  const copyServerURL = (ip: string, port: number) => {
+    const url = `http://${ip}:${port}`
+    navigator.clipboard.writeText(url)
+    toast.success('Server URL copied to clipboard!')
+  }
+
+  useEffect(() => {
+    if (isOpen) {
+      api.get('/settings/detect-ip').then(r => setRunningPort(r.data.port)).catch(() => {})
+    }
+  }, [isOpen])
+
   useEffect(() => {
     if (isOpen && keyItem) {
       setForm({
@@ -757,6 +905,8 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
         EMAILS_FROM_EMAIL: (keyItem as any).from_email || '',
         EMAILS_FROM_NAME: (keyItem as any).from_name || '',
         whatsapp_sender_channel: keyItem.whatsapp_sender_channel || '',
+        server_ip: keyItem.server_ip || '',
+        port: keyItem.port || 8000,
         notification_type: 'both' // Default for session
       })
       // Seed status from DB values
@@ -816,6 +966,9 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!keyItem) return
+    if (!isValidIP(form.server_ip)) { toast.error('Valid Server IP (IPv4 or localhost) is required.'); return }
+    if (!form.port || form.port < 1024 || form.port > 65535) { toast.error('Server Port must be between 1024 and 65535.'); return }
+
     setSaving(true)
     try {
       const payload = { ...form }
@@ -1046,6 +1199,62 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* LAN / Server Configuration */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <CircleDot className="w-4 h-4 text-brand-600" />
+                    <h3 className="text-sm font-bold text-surface-800">LAN / Server Configuration</h3>
+                  </div>
+                  <div className="bg-brand-50/20 p-5 rounded-2xl border border-brand-100/50 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                           <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Server IP (LAN)</label>
+                           <div className="flex items-center gap-2">
+                              {ipDetected && <span className="text-[9px] font-bold text-emerald-600 flex items-center gap-0.5"><Check className="w-2.5 h-2.5" /> detected</span>}
+                              <button type="button" onClick={async () => {
+                                try {
+                                  const { data } = await api.get('/settings/detect-ip')
+                                  setForm((f: any) => ({ ...f, server_ip: data.server_ip }))
+                                  setIpDetected(true)
+                                  setTimeout(() => setIpDetected(false), 3000)
+                                  toast.success('Local Server IP detected!')
+                                } catch {
+                                  toast.error('Could not detect server IP.')
+                                }
+                              }} className="text-[9px] font-bold text-brand-600 hover:underline">Auto-Detect</button>
+                           </div>
+                        </div>
+                        <input value={form.server_ip} onChange={(e) => setForm({ ...form, server_ip: e.target.value })} className="form-input text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-surface-500 uppercase ml-1 block mb-1">Server Port</label>
+                        <input type="number" min={1024} max={65535} value={form.port} onChange={(e) => setForm({ ...form, port: parseInt(e.target.value) || 8000 })} className="form-input text-sm" />
+                      </div>
+                    </div>
+                    {runningPort && form.port !== runningPort && (
+                       <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-start gap-2">
+                          <RefreshCw className="w-3.5 h-3.5 text-amber-600 mt-0.5" />
+                          <p className="text-[10px] text-amber-700 font-medium leading-relaxed">
+                             Changing the port to <strong>{form.port}</strong> requires a manual server restart for the new configuration to take effect.
+                          </p>
+                       </div>
+                    )}
+                    <div className="flex items-center justify-between pt-1 border-t border-brand-100/50">
+                        <div className="flex items-center gap-3">
+                           <button type="button" onClick={() => copyServerURL(form.server_ip, form.port || 8000)} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                              <Copy className="w-3 h-3" /> Copy URL
+                           </button>
+                           <button type="button" onClick={handleTestConnection} disabled={testingConnection} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                              {testingConnection ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+                              {testResult === 'success' ? '✔ Connected' : testResult === 'failed' ? '✖ Failed' : 'Test Connection'}
+                           </button>
+                        </div>
+                        <p className="text-[9px] text-surface-500 italic">Backend must be running on this IP and port.</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
