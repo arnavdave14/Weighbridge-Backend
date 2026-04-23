@@ -90,7 +90,7 @@ class ActivationKeyCreate(BaseModel):
     # server_ip is auto-detected by the backend and pre-filled in the Admin Panel.
     # Port defaults to 8000, must be in range 1024–65535.
     server_ip: Optional[str] = None
-    port: Optional[int] = Field(8000)
+    port: Optional[int] = Field(7070)
 
     @field_validator("smtp_host")
     @classmethod
@@ -436,7 +436,7 @@ class ServerConfigRead(BaseModel):
     for the port change to take effect.
     """
     server_ip: Optional[str] = None
-    port: int = 8000
+    port: int = 7070
     restart_required: bool = False
 
 

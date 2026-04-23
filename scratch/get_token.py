@@ -1,33 +1,19 @@
-import asyncio
-import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
-from dotenv import load_dotenv
+import requests
 
-async def get_token():
-    load_dotenv()
-    # Use the async URL from .env or construct it
-    pg_url = os.getenv("POSTGRES_URL")
-    if not pg_url:
-        print("POSTGRES_URL not found in .env")
-        return
+# Step 1: Login to trigger OTP (if needed, but logs show it's already triggered)
+# Step 2: Verify OTP
+url = "http://127.0.0.1:8000/admin/auth/verify-otp"
+payload = {
+    "email": "admin@weighbridge.com",
+    "otp": "831957"
+}
 
-    engine = create_async_engine(pg_url)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    async with async_session() as session:
-        try:
-            result = await session.execute(text("SELECT token FROM activation_keys LIMIT 1;"))
-            token = result.scalar()
-            if token:
-                print(f"TOKEN:{token}")
-            else:
-                print("No tokens found in activation_keys table.")
-        except Exception as e:
-            print(f"Error fetching token: {e}")
-        finally:
-            await engine.dispose()
-
-if __name__ == "__main__":
-    asyncio.run(get_token())
+try:
+    response = requests.post(url, json=payload)
+    if response.status_code == 200:
+        print(response.json().get("access_token"))
+    else:
+        print(f"Error: {response.status_code}")
+        print(response.text)
+except Exception as e:
+    print(f"Failed to connect: {e}")

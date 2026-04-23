@@ -281,7 +281,7 @@ class AdminAppService:
 
                     # Server / LAN Connection Config
                     server_ip=key_in.server_ip,
-                    port=key_in.port if key_in.port is not None else 8000,
+                    port=key_in.port if key_in.port is not None else 7070,
                 )
 
                 # Create audit history for generation
