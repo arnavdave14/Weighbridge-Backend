@@ -89,6 +89,23 @@ async def lifespan(app: "FastAPI"):
     # Start the background synchronization task ONLY in development mode
     if settings.ENVIRONMENT == "development" and settings.effective_db_mode in ["dual", "postgres"]:
         asyncio.create_task(run_sync_worker_loop())
+
+    # Start Heartbeat Monitor Task
+    if remote_engine:
+        async def heartbeat_monitor():
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    from app.database.postgres import remote_session
+                    from sqlalchemy import text
+                    async with remote_session() as db:
+                        # If no heartbeat for 5 minutes, set to OFFLINE
+                        await db.execute(text("UPDATE activation_keys SET connection_status = 'OFFLINE' WHERE connection_status = 'ACTIVE' AND last_heartbeat_at < NOW() - INTERVAL '5 minutes'"))
+                        await db.commit()
+                except Exception as e:
+                    logger.error(f"Heartbeat monitor error: {e}")
+        asyncio.create_task(heartbeat_monitor())
+
     
     # Initialize Remote Database tables if available
     if remote_engine:
@@ -252,4 +269,4 @@ async def health_check_celery():
         return JSONResponse(status_code=500, content={"status": "down", "message": str(e)})
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.SERVER_PORT, reload=True)

@@ -187,10 +187,20 @@ async def update_settings(
     )
 
 
+from pydantic import BaseModel
+import platform
+import asyncio
+
+class ConnectionTestResult(BaseModel):
+    ip_status: str
+    port_status: str
+    service_status: str
+    message: str
+
 @router.get(
     "/test-connection",
-    summary="Test connectivity to a generic server_ip:port/health",
-    response_model=dict,
+    summary="Multi-stage connection validation",
+    response_model=ConnectionTestResult,
 )
 async def test_connection(
     ip: str,
@@ -198,25 +208,68 @@ async def test_connection(
     _: AdminUser = Depends(get_current_admin),
 ):
     """
-    Attempts to probe a target server's /health endpoint from the backend.
-    Used by the Admin Panel to verify LAN settings without hitting CORS issues.
+    Multi-stage connection validation:
+    1. IP Reachability (Ping)
+    2. Port Availability (TCP connection)
+    3. Service Health (HTTP GET /health)
     """
-    target_url = f"http://{ip}:{port}/health"
-    logger.info("Settings: Testing connection to %s", target_url)
+    logger.info("Settings: Testing connection to %s:%d", ip, port)
 
+    ip_reachable = False
+    port_open = False
+    service_running = False
+    
+    # 1. IP Reachability
+    if ip.lower() in ("localhost", "127.0.0.1", "0.0.0.0"):
+        ip_reachable = True
+    else:
+        try:
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else ('-t' if platform.system().lower() == 'darwin' else '-W')
+            
+            proc = await asyncio.create_subprocess_exec(
+                'ping', param, '1', timeout_param, '1', ip,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.communicate()
+            ip_reachable = (proc.returncode == 0)
+        except Exception:
+            pass
+
+    # 2. Port Availability
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(target_url)
-            if resp.status_code == 200:
-                return {"reachable": True, "message": "Connection successful!"}
-            else:
-                return {
-                    "reachable": False,
-                    "message": f"Server reached but returned status {resp.status_code}",
-                }
-    except httpx.ConnectError:
-        return {"reachable": False, "message": "Connection failed: Server is unreachable."}
-    except httpx.TimeoutException:
-        return {"reachable": False, "message": "Connection failed: Request timed out."}
-    except Exception as e:
-        return {"reachable": False, "message": f"Connection failed: {str(e)}"}
+        _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=2.0)
+        writer.close()
+        await writer.wait_closed()
+        port_open = True
+        ip_reachable = True  # If port is open, IP is reachable
+    except Exception:
+        pass
+
+    # 3. Service Health
+    if port_open:
+        target_url = f"http://{ip}:{port}/health"
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.get(target_url)
+                if resp.status_code == 200:
+                    service_running = True
+        except Exception:
+            pass
+
+    if service_running:
+        message = "Service is live and responding."
+    elif port_open:
+        message = "Port is open, but the service at /health is not responding. It may be booting or misconfigured."
+    elif ip_reachable:
+        message = "Client software is not running yet. This is expected before deployment."
+    else:
+        message = "The target IP is not reachable on the network. Check if the device is powered on and connected."
+
+    return ConnectionTestResult(
+        ip_status="Reachable" if ip_reachable else "Not Reachable",
+        port_status="Open" if port_open else "Closed",
+        service_status="Running" if service_running else "Not Running",
+        message=message
+    )

@@ -78,12 +78,12 @@ class ActivationKeyCreate(BaseModel):
     smtp_enabled: bool = False
     smtp_host: Optional[str] = Field("smtp.gmail.com", alias="SMTP_HOST")
     smtp_port: Optional[int] = Field(587, alias="SMTP_PORT")
-    smtp_user: Optional[str] = Field(None, alias="SMTP_USER")
-    smtp_password: Optional[str] = Field(None, alias="SMTP_PASS")
-    from_email: Optional[str] = Field(None, alias="EMAILS_FROM_EMAIL")
-    from_name: Optional[str] = Field(None, alias="EMAILS_FROM_NAME")
+    smtp_user: Optional[str] = Field("ticketemailsender01@gmail.com", alias="SMTP_USER")
+    smtp_password: Optional[str] = Field("quzknqtlseeeeqdw", alias="SMTP_PASS")
+    from_email: Optional[str] = Field("ticketemailsender01@gmail.com", alias="EMAILS_FROM_EMAIL")
+    from_name: Optional[str] = Field("Weighment", alias="EMAILS_FROM_NAME")
 
-    whatsapp_sender_channel: Optional[str] = None
+    whatsapp_sender_channel: Optional[str] = "919893224689:5"
     email_sender: Optional[str] = None
 
     # --- Server / LAN Connection Config ---
@@ -324,6 +324,8 @@ class ActivationKeyRead(BaseModel):
     # Server / LAN Connection Config
     server_ip: Optional[str] = None
     port: Optional[int] = None
+    connection_status: str
+    last_heartbeat_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

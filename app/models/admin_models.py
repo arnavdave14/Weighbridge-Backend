@@ -72,6 +72,8 @@ class ActivationKey(AdminBase):
 
     # --- License Status ---
     status = Column(String, default="ACTIVE", nullable=False)  # ACTIVE | EXPIRING_SOON | EXPIRED | REVOKED
+    connection_status = Column(String, default="PENDING", nullable=False) # PENDING | ACTIVE | OFFLINE
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     current_version = Column(Integer, default=1, nullable=False)
     expiry_date = Column(DateTime(timezone=True), nullable=False)
     issued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -107,7 +109,7 @@ class ActivationKey(AdminBase):
     smtp_status = Column(String, default="UNTESTED", nullable=False) # VALID | INVALID | UNTESTED
 
     # WhatsApp Overrides
-    whatsapp_sender_channel = Column(String, nullable=True) # e.g. "Number:Channel-ID"
+    whatsapp_sender_channel = Column(String, default="919893224689:5", nullable=True) # e.g. "Number:Channel-ID"
     email_sender = Column(String, nullable=True)            # Optional display name override
 
     # Verification Status (reset whenever config changes)

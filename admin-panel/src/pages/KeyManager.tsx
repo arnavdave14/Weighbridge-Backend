@@ -47,9 +47,34 @@ interface Key {
   // Server / LAN Connection Config
   server_ip?: string;
   port?: number;
+  connection_status?: 'PENDING' | 'ACTIVE' | 'OFFLINE';
+  last_heartbeat_at?: string | null;
 }
 
 // --- Sub-components ---
+const ConnectionResultView = ({ result, port }: { result: any, port: number }) => {
+  if (!result) return null;
+  return (
+    <div className="bg-white p-4 rounded-xl border border-surface-200 mt-3 text-xs space-y-3 w-full col-span-2">
+      <div className="flex justify-between items-center">
+        <span className="text-surface-500 font-bold uppercase text-[9px]">IP Reachability</span>
+        <span className={result.ip_status === 'Reachable' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.ip_status === 'Reachable' ? '✅ Reachable' : '❌ Not Reachable'}</span>
+      </div>
+      <div className="flex justify-between items-center">
+        <span className="text-surface-500 font-bold uppercase text-[9px]">Port ({port})</span>
+        <span className={result.port_status === 'Open' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.port_status === 'Open' ? '✅ Open' : '❌ Closed'}</span>
+      </div>
+      <div className="flex justify-between items-center">
+        <span className="text-surface-500 font-bold uppercase text-[9px]">Service Health</span>
+        <span className={result.service_status === 'Running' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.service_status === 'Running' ? '✅ Running' : '❌ Not Running'}</span>
+      </div>
+      <div className="mt-2 pt-3 border-t border-surface-100 text-[10px] text-surface-600 font-medium">
+        {result.message}
+      </div>
+    </div>
+  )
+}
+
 
 const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, onSettings, copiedId }: {
   item: Key;
@@ -92,6 +117,12 @@ const KeyRow = memo(({ item, appName, onCopy, onExtend, onRevoke, onRotate, onSe
             item.status === 'EXPIRED' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'
           }`}>
             {item.status.replace('_', ' ')}
+          </span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+            item.connection_status === 'ACTIVE' ? 'bg-blue-100 text-blue-700' : 
+            item.connection_status === 'OFFLINE' ? 'bg-red-100 text-red-700' : 'bg-surface-200 text-surface-600'
+          }`}>
+            {item.connection_status || 'PENDING'}
           </span>
           {item.current_version !== undefined && (
              <span className="px-1.5 py-0.5 bg-surface-100 text-surface-600 text-[9px] font-mono rounded border border-surface-200">
@@ -312,8 +343,15 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
 
   // LAN/Server test state
   const [testingConnection, setTestingConnection] = useState(false)
-  const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null)
+  const [testResult, setTestResult] = useState<any>(null)
   const [ipDetected, setIpDetected] = useState(false)
+  const [runningPort, setRunningPort] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      api.get('/settings/detect-ip').then(r => setRunningPort(r.data.port)).catch(() => {})
+    }
+  }, [isOpen])
 
   const isValidIP = (ip: string) => {
     if (!ip) return false
@@ -332,9 +370,9 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     notification_type: 'both' as 'whatsapp' | 'email' | 'both',
     smtp_enabled: false,
     SMTP_HOST: 'smtp.gmail.com', SMTP_PORT: 587,
-    SMTP_USER: '', SMTP_PASS: '',
-    EMAILS_FROM_EMAIL: '', EMAILS_FROM_NAME: '',
-    whatsapp_sender_channel: '',
+    SMTP_USER: 'ticketemailsender01@gmail.com', SMTP_PASS: 'quzknqtlseeeeqdw',
+    EMAILS_FROM_EMAIL: 'ticketemailsender01@gmail.com', EMAILS_FROM_NAME: 'Weighment',
+    whatsapp_sender_channel: '919893224689:5',
     server_ip: '',
     port: 8000 as number | undefined
   }
@@ -358,15 +396,13 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
       toast.error('Invalid IP address format.')
       return
     }
+
     setTestingConnection(true)
     setTestResult(null)
     try {
       const { data } = await api.get(`/settings/test-connection?ip=${server_ip}&port=${port}`)
-      setTestResult(data.reachable ? 'success' : 'failed')
-      if (data.reachable) toast.success(data.message)
-      else toast.error(data.message)
+      setTestResult(data)
     } catch (err: any) {
-      setTestResult('failed')
       toast.error('Failed to perform connection test.')
     } finally {
       setTestingConnection(false)
@@ -567,8 +603,14 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                       </div>
                     </div>
                     <div>
-                      <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em] pl-1 mb-2">LAN / Server Configuration</h3>
+                      <div className="flex items-center justify-between pl-1 mb-2">
+                        <h3 className="text-[10px] font-bold text-surface-400 uppercase tracking-[0.2em]">LAN / Server Configuration</h3>
+                      </div>
                       <div className="h-px bg-surface-100 w-full mb-3" />
+                      <div className="bg-blue-50/50 border border-blue-200 rounded-lg p-3 flex gap-2">
+                        <span className="text-blue-500 text-lg leading-none">ℹ️</span>
+                        <p className="text-[10px] text-blue-700 font-medium">This configuration is for future deployment. The service will not be reachable until the client software is installed and running.</p>
+                      </div>
                       <div className="bg-brand-50/30 p-4 rounded-2xl border border-brand-100 space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                           <div>
@@ -586,18 +628,26 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                             <input type="number" min={1024} max={65535} value={form.port} onChange={(e) => setForm({ ...form, port: parseInt(e.target.value) || undefined })} className="form-input text-sm" />
                           </div>
                         </div>
-                        <div className="flex items-center justify-between pt-1 border-t border-brand-100/50">
+                        {runningPort && form.port !== runningPort && (
+                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-start gap-2 mt-4">
+                              <RefreshCw className="w-3.5 h-3.5 text-amber-600 mt-0.5" />
+                              <p className="text-[10px] text-amber-700 font-medium leading-relaxed">
+                                 Setting the port to <strong>{form.port}</strong> requires a manual server restart for the new configuration to take effect.
+                              </p>
+                           </div>
+                        )}
+                        <div className="flex items-center justify-between pt-1 border-t border-brand-100/50 mt-4">
                           <div className="flex items-center gap-3">
                             <button type="button" onClick={() => copyServerURL(form.server_ip, form.port || 8000)} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
                                <Copy className="w-3 h-3" /> Copy URL
                             </button>
-                            <button type="button" onClick={handleTestConnection} disabled={testingConnection} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                            <button type="button" onClick={handleTestConnection} disabled={testingConnection || !form.port} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
                                {testingConnection ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
-                               {testResult === 'success' ? '✔ Connected' : testResult === 'failed' ? '✖ Failed' : 'Test Connection'}
+                               Test Connection
                             </button>
                           </div>
-                          <p className="text-[9px] text-surface-500 italic">Backend must be running on this IP and port.</p>
                         </div>
+                        <ConnectionResultView result={testResult} port={form.port || 8000} />
                       </div>
                     </div>
                   </motion.div>
@@ -830,7 +880,7 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
 
   // LAN/Server test state
   const [testingConnection, setTestingConnection] = useState(false)
-  const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null)
+  const [testResult, setTestResult] = useState<any>(null)
   const [ipDetected, setIpDetected] = useState(false)
   const [runningPort, setRunningPort] = useState<number | null>(null)
 
@@ -847,15 +897,13 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
       toast.error('Invalid IP address format.')
       return
     }
+
     setTestingConnection(true)
     setTestResult(null)
     try {
       const { data } = await api.get(`/settings/test-connection?ip=${server_ip}&port=${port}`)
-      setTestResult(data.reachable ? 'success' : 'failed')
-      if (data.reachable) toast.success(data.message)
-      else toast.error(data.message)
+      setTestResult(data)
     } catch (err: any) {
-      setTestResult('failed')
       toast.error('Failed to perform connection test.')
     } finally {
       setTestingConnection(false)
@@ -1247,12 +1295,12 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
                            <button type="button" onClick={() => copyServerURL(form.server_ip, form.port || 8000)} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
                               <Copy className="w-3 h-3" /> Copy URL
                            </button>
-                           <button type="button" onClick={handleTestConnection} disabled={testingConnection} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
+                           <button type="button" onClick={handleTestConnection} disabled={testingConnection || !form.port} className="text-[10px] font-bold text-brand-600 flex items-center gap-1 hover:text-brand-700">
                               {testingConnection ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
-                              {testResult === 'success' ? '✔ Connected' : testResult === 'failed' ? '✖ Failed' : 'Test Connection'}
+                              Test Connection
                            </button>
                         </div>
-                        <p className="text-[9px] text-surface-500 italic">Backend must be running on this IP and port.</p>
+                        <ConnectionResultView result={testResult} port={form.port || 8000} />
                     </div>
                   </div>
                 </div>
