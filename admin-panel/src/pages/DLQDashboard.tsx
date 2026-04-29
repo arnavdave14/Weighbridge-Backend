@@ -32,7 +32,11 @@ export default function DLQDashboard() {
   const toast = useToast()
   const [entries, setEntries] = useState<FailedNotification[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<'pending' | 'retried' | 'resolved' | 'all'>('all')
+  const [filter, setFilter] = useState<'pending' | 'retried' | 'resolved' | 'all'>(
+    () => (localStorage.getItem('dlq_filter') || 'all') as 'pending' | 'retried' | 'resolved' | 'all'
+  )
+
+  useEffect(() => { localStorage.setItem('dlq_filter', filter) }, [filter])
   const [selectedEntry, setSelectedEntry] = useState<FailedNotification | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 

@@ -110,20 +110,35 @@ function SkeletonRow() {
 export default function Receipts() {
   const toast = useToast()
 
-  // ── Filter state ──
-  const [selectedApp, setSelectedApp]         = useState('')
-  const [selectedKey, setSelectedKey]         = useState('')
-  const [selectedMachine, setSelectedMachine] = useState('')
-  const [dateFrom, setDateFrom]               = useState('')
-  const [dateTo, setDateTo]                   = useState('')
-  const [isSynced, setIsSynced]               = useState<'' | 'true' | 'false'>('')
-  const [search, setSearch]                   = useState('')
-  const [sortBy, setSortBy]                   = useState<SortField>('created_at')
-  const [sortDir, setSortDir]                 = useState<SortDir>('desc')
+  // ── Filter state (persisted to localStorage) ──
+  const [selectedApp, setSelectedApp]         = useState(() => localStorage.getItem('receipts_app') || '')
+  const [selectedKey, setSelectedKey]         = useState(() => localStorage.getItem('receipts_key') || '')
+  const [selectedMachine, setSelectedMachine] = useState(() => localStorage.getItem('receipts_machine') || '')
+  const [dateFrom, setDateFrom]               = useState(() => localStorage.getItem('receipts_dateFrom') || '')
+  const [dateTo, setDateTo]                   = useState(() => localStorage.getItem('receipts_dateTo') || '')
+  const [isSynced, setIsSynced]               = useState<'' | 'true' | 'false'>(() => (localStorage.getItem('receipts_isSynced') || '') as '' | 'true' | 'false')
+  const [search, setSearch]                   = useState(() => localStorage.getItem('receipts_search') || '')
+  const [sortBy, setSortBy]                   = useState<SortField>(() => (localStorage.getItem('receipts_sortBy') || 'created_at') as SortField)
+  const [sortDir, setSortDir]                 = useState<SortDir>(() => (localStorage.getItem('receipts_sortDir') || 'desc') as SortDir)
+
+  // ── Sync filters to localStorage ──
+  useEffect(() => {
+    localStorage.setItem('receipts_app', selectedApp)
+    localStorage.setItem('receipts_key', selectedKey)
+    localStorage.setItem('receipts_machine', selectedMachine)
+    localStorage.setItem('receipts_dateFrom', dateFrom)
+    localStorage.setItem('receipts_dateTo', dateTo)
+    localStorage.setItem('receipts_isSynced', isSynced)
+    localStorage.setItem('receipts_search', search)
+    localStorage.setItem('receipts_sortBy', sortBy)
+    localStorage.setItem('receipts_sortDir', sortDir)
+  }, [selectedApp, selectedKey, selectedMachine, dateFrom, dateTo, isSynced, search, sortBy, sortDir])
 
   // ── Pagination ──
   const [page, setPage]   = useState(1)
-  const [limit, setLimit] = useState(50)
+  const [limit, setLimit] = useState(() => parseInt(localStorage.getItem('receipts_limit') || '50'))
+
+  useEffect(() => { localStorage.setItem('receipts_limit', limit.toString()) }, [limit])
 
   // ── Data ──
   const [data, setData]       = useState<PaginatedResponse | null>(null)
@@ -384,6 +399,7 @@ export default function Receipts() {
             onClick={() => {
               setSelectedApp(''); setSelectedKey(''); setSelectedMachine('')
               setDateFrom(''); setDateTo(''); setIsSynced(''); setSearch(''); setPage(1)
+              ;['receipts_app','receipts_key','receipts_machine','receipts_dateFrom','receipts_dateTo','receipts_isSynced','receipts_search'].forEach(k => localStorage.removeItem(k))
             }}
             className="btn-secondary text-xs px-3 py-2"
           >

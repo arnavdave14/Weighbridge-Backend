@@ -44,22 +44,25 @@ function CreateEmployeeDrawer({
   const toast = useToast()
   const [saving, setSaving] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [form, setForm] = useState({
-    name: '',
-    username: '',
-    email: '',
-    password: '',
-    key_id: '',
-    role: 'operator',
+  const [form, setForm] = useState(() => {
+    try {
+      const saved = localStorage.getItem('createEmployeeForm')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {}
+    return {
+      name: '',
+      username: '',
+      email: '',
+      password: '',
+      key_id: '',
+      role: 'operator',
+    }
   })
 
-  // Reset form when drawer opens
+  // Save to localStorage whenever form changes
   useEffect(() => {
-    if (isOpen) {
-      setForm({ name: '', username: '', email: '', password: '', key_id: '', role: 'operator' })
-      setShowPassword(false)
-    }
-  }, [isOpen])
+    localStorage.setItem('createEmployeeForm', JSON.stringify(form))
+  }, [form])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -77,6 +80,8 @@ function CreateEmployeeDrawer({
         role: form.role,
       })
       toast.success(`Employee '${form.username}' created successfully!`)
+      localStorage.removeItem('createEmployeeForm')
+      setForm({ name: '', username: '', email: '', password: '', key_id: '', role: 'operator' })
       onSuccess()
       onClose()
     } catch (err: any) {
@@ -360,12 +365,18 @@ export default function Employees() {
 
   const [keys, setKeys] = useState<Key[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
-  const [selectedKeyToken, setSelectedKeyToken] = useState('')
+  const [selectedKeyToken, setSelectedKeyToken] = useState(() => localStorage.getItem('empDashboardKey') || '')
   const [loading, setLoading] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(() => localStorage.getItem('empDashboardSearch') || '')
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [includeInactive, setIncludeInactive] = useState(false)
+  const [includeInactive, setIncludeInactive] = useState(() => localStorage.getItem('empDashboardInactive') === 'true')
+
+  useEffect(() => {
+    localStorage.setItem('empDashboardKey', selectedKeyToken)
+    localStorage.setItem('empDashboardSearch', search)
+    localStorage.setItem('empDashboardInactive', includeInactive.toString())
+  }, [selectedKeyToken, search, includeInactive])
 
   // Load license keys (for tenant selector)
   useEffect(() => {

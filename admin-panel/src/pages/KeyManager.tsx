@@ -55,20 +55,28 @@ interface Key {
 const ConnectionResultView = ({ result, port }: { result: any, port: number }) => {
   if (!result) return null;
   return (
-    <div className="bg-white p-4 rounded-xl border border-surface-200 mt-3 text-xs space-y-3 w-full col-span-2">
-      <div className="flex justify-between items-center">
-        <span className="text-surface-500 font-bold uppercase text-[9px]">IP Reachability</span>
-        <span className={result.ip_status === 'Reachable' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.ip_status === 'Reachable' ? '✅ Reachable' : '❌ Not Reachable'}</span>
+    <div className="mt-3 bg-white rounded-xl border border-surface-200 overflow-hidden">
+      <div className="divide-y divide-surface-100">
+        <div className="flex justify-between items-center px-4 py-2.5">
+          <span className="text-surface-500 font-bold uppercase text-[9px] tracking-wider">IP Reachability</span>
+          <span className={result.ip_status === 'Reachable' ? 'text-emerald-600 font-bold text-xs' : 'text-red-500 font-bold text-xs'}>
+            {result.ip_status === 'Reachable' ? '✅ Reachable' : '❌ Not Reachable'}
+          </span>
+        </div>
+        <div className="flex justify-between items-center px-4 py-2.5">
+          <span className="text-surface-500 font-bold uppercase text-[9px] tracking-wider">Port ({port})</span>
+          <span className={result.port_status === 'Open' ? 'text-emerald-600 font-bold text-xs' : 'text-red-500 font-bold text-xs'}>
+            {result.port_status === 'Open' ? '✅ Open' : '❌ Closed'}
+          </span>
+        </div>
+        <div className="flex justify-between items-center px-4 py-2.5">
+          <span className="text-surface-500 font-bold uppercase text-[9px] tracking-wider">Service Health</span>
+          <span className={result.service_status === 'Running' ? 'text-emerald-600 font-bold text-xs' : 'text-red-500 font-bold text-xs'}>
+            {result.service_status === 'Running' ? '✅ Running' : '❌ Not Running'}
+          </span>
+        </div>
       </div>
-      <div className="flex justify-between items-center">
-        <span className="text-surface-500 font-bold uppercase text-[9px]">Port ({port})</span>
-        <span className={result.port_status === 'Open' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.port_status === 'Open' ? '✅ Open' : '❌ Closed'}</span>
-      </div>
-      <div className="flex justify-between items-center">
-        <span className="text-surface-500 font-bold uppercase text-[9px]">Service Health</span>
-        <span className={result.service_status === 'Running' ? 'text-emerald-600 font-bold' : 'text-red-500 font-bold'}>{result.service_status === 'Running' ? '✅ Running' : '❌ Not Running'}</span>
-      </div>
-      <div className="mt-2 pt-3 border-t border-surface-100 text-[10px] text-surface-600 font-medium">
+      <div className="px-4 py-2.5 bg-surface-50 border-t border-surface-100 text-[10px] text-surface-500 font-medium leading-relaxed">
         {result.message}
       </div>
     </div>
@@ -330,16 +338,22 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
   onSuccess: (rawKeys: string[]) => void;
 }) => {
   const toast = useToast()
-  const [step, setStep] = useState(1)
+  const [step, setStep] = useState(() => {
+    try {
+      const saved = localStorage.getItem('createKeyStep')
+      if (saved) return parseInt(saved) || 1
+    } catch (e) {}
+    return 1
+  })
   const [saving, setSaving] = useState(false)
   const [lastSubmitted, setLastSubmitted] = useState<string | null>(null)
 
   // WA test state
   const [waTestStatus, setWaTestStatus] = useState<VerifyStatus>('idle')
-  const [waTestPhone, setWaTestPhone] = useState('')
+  const [waTestPhone, setWaTestPhone] = useState(() => localStorage.getItem('createKeyWaPhone') || '')
   // SMTP test state
   const [smtpTestStatus, setSmtpTestStatus] = useState<VerifyStatus>('idle')
-  const [smtpTestEmail, setSmtpTestEmail] = useState('')
+  const [smtpTestEmail, setSmtpTestEmail] = useState(() => localStorage.getItem('createKeySmtpEmail') || '')
 
   // LAN/Server test state
   const [testingConnection, setTestingConnection] = useState(false)
@@ -376,12 +390,24 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     server_ip: '',
     port: 8000 as number | undefined
   }
-  const [form, setForm] = useState(initialForm)
+  const [form, setForm] = useState<typeof initialForm>(() => {
+    try {
+      const saved = localStorage.getItem('createKeyForm')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {}
+    return initialForm
+  })
+
+  // Sync to localStorage
+  useEffect(() => { localStorage.setItem('createKeyForm', JSON.stringify(form)) }, [form])
+  useEffect(() => { localStorage.setItem('createKeyStep', step.toString()) }, [step])
+  useEffect(() => { localStorage.setItem('createKeyWaPhone', waTestPhone) }, [waTestPhone])
+  useEffect(() => { localStorage.setItem('createKeySmtpEmail', smtpTestEmail) }, [smtpTestEmail])
 
   const handleDetectIP = async () => {
     try {
       const { data } = await api.get('/settings/detect-ip')
-      setForm(f => ({ ...f, server_ip: data.server_ip, port: data.port }))
+      setForm((f: typeof initialForm) => ({ ...f, server_ip: data.server_ip }))
       setIpDetected(true)
       setTimeout(() => setIpDetected(false), 3000)
       toast.success('Local Server IP detected!')
@@ -420,6 +446,11 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
     setWaTestStatus('idle'); setWaTestPhone('')
     setSmtpTestStatus('idle'); setSmtpTestEmail('')
     setLastSubmitted(null)
+    
+    localStorage.removeItem('createKeyForm')
+    localStorage.removeItem('createKeyStep')
+    localStorage.removeItem('createKeyWaPhone')
+    localStorage.removeItem('createKeySmtpEmail')
   }
 
   const handleClose = () => { resetAll(); onClose() }
@@ -530,8 +561,8 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                           <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Company Name *</label>
                           <input required value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} className="form-input font-bold" />
                         </div>
-                        <ImageUpload label="Company Logo" value={form.logo_url} target="logo" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, logo_url: url }))} />
-                        <ImageUpload label="Sign-Up Image" value={form.signup_image_url} target="signup" appId={form.app_id} onChange={(url) => setForm(f => ({ ...f, signup_image_url: url }))} />
+                        <ImageUpload label="Company Logo" value={form.logo_url} target="logo" appId={form.app_id} onChange={(url) => setForm((f: typeof initialForm) => ({ ...f, logo_url: url }))} />
+                        <ImageUpload label="Sign-Up Image" value={form.signup_image_url} target="signup" appId={form.app_id} onChange={(url) => setForm((f: typeof initialForm) => ({ ...f, signup_image_url: url }))} />
                       </div>
                     </div>
                     <div>
@@ -540,7 +571,15 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Mobile Number</label>
-                          <input value={form.mobile_number} onChange={(e) => setForm({ ...form, mobile_number: e.target.value })} placeholder="91XXXXXXXXXX" className="form-input" />
+                          <input
+                            type="tel"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={form.mobile_number}
+                            onChange={(e) => setForm({ ...form, mobile_number: e.target.value.replace(/\D/g, '') })}
+                            placeholder="91XXXXXXXXXX"
+                            className="form-input"
+                          />
                         </div>
                         <div className="col-span-2">
                           <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Office Address</label>
@@ -559,14 +598,14 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                       <div className="h-px bg-surface-100 w-full mb-3" />
                       <div className="space-y-3">
                         <div className="flex justify-end">
-                          <button type="button" onClick={() => setForm(f => ({ ...f, labels: [...f.labels, { name: '', type: 'text', required: false }] }))} className="text-[10px] font-bold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                          <button type="button" onClick={() => setForm((f: typeof initialForm) => ({ ...f, labels: [...f.labels, { name: '', type: 'text', required: false }] }))} className="text-[10px] font-bold text-brand-600 hover:text-brand-700 flex items-center gap-1">
                             <Plus className="w-3 h-3" /> Add Field
                           </button>
                         </div>
                         {form.labels.length === 0 && (
                           <div className="text-[10px] text-surface-400 text-center py-4 border-2 border-dashed border-surface-200 rounded-xl">No custom fields added.</div>
                         )}
-                        {form.labels.map((field, idx) => (
+                        {form.labels.map((field: CustomLabel, idx: number) => (
                           <div key={idx} className="flex items-center gap-2">
                             <input required value={field.name} onChange={(e) => { const l = [...form.labels]; l[idx].name = e.target.value; setForm({ ...form, labels: l }) }} placeholder="Field Name" className="form-input text-xs py-1.5 flex-1" />
                             <select value={field.type} onChange={(e) => { const l = [...form.labels]; l[idx].type = e.target.value as any; setForm({ ...form, labels: l }) }} className="form-input text-[10px] py-1.5 w-24 bg-white">
@@ -579,7 +618,7 @@ const CreateKeyDrawer = memo(({ isOpen, onClose, apps, onSuccess }: {
                             <label className="flex items-center gap-1 cursor-pointer text-[9px] font-bold text-surface-500 uppercase">
                               <input type="checkbox" checked={field.required} onChange={(e) => { const l = [...form.labels]; l[idx].required = e.target.checked; setForm({ ...form, labels: l }) }} className="w-3 h-3 accent-brand-500" /> Req
                             </label>
-                            <button type="button" onClick={() => setForm(f => ({ ...f, labels: f.labels.filter((_, i) => i !== idx) }))} className="p-1.5 text-surface-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                            <button type="button" onClick={() => setForm((f: typeof initialForm) => ({ ...f, labels: f.labels.filter((_: CustomLabel, i: number) => i !== idx) }))} className="p-1.5 text-surface-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}
                       </div>
@@ -1085,7 +1124,15 @@ const KeySettingsDrawer = memo(({ isOpen, onClose, keyItem, onSuccess }: {
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-surface-500 uppercase ml-1">Mobile Number</label>
-                      <input value={form.mobile_number} onChange={(e) => setForm({ ...form, mobile_number: e.target.value })} placeholder="91XXXXXXXXXX" className="form-input mt-1" />
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={form.mobile_number}
+                        onChange={(e) => setForm({ ...form, mobile_number: e.target.value.replace(/\D/g, '') })}
+                        placeholder="91XXXXXXXXXX"
+                        className="form-input mt-1"
+                      />
                     </div>
                   </div>
                   <div>
@@ -1335,6 +1382,7 @@ export default function KeyManager() {
   const [generatedRawKeys, setGeneratedRawKeys] = useState<string[]>([])
   const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
   const [dateRange, setDateRange] = useState({ start: '', end: '' })
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED' | 'REVOKED'>('ALL')
   const toast = useToast()
 
   const fetchAllKeys = useCallback(async () => {
@@ -1357,12 +1405,16 @@ export default function KeyManager() {
   const filteredAndSortedKeys = useMemo(() => {
     let result = selectedAppId ? allKeys.filter((k) => k.app_id === selectedAppId) : [...allKeys]
 
+    // Status tab filter
+    if (statusFilter !== 'ALL') {
+      result = result.filter((k) => k.status.toUpperCase() === statusFilter)
+    }
+
     if (sortOrder === 'custom' && dateRange.start && dateRange.end) {
       const start = new Date(dateRange.start)
       const end = new Date(dateRange.end)
       start.setHours(0, 0, 0, 0)
       end.setHours(23, 59, 59, 999)
-      
       result = result.filter(key => {
         const date = new Date(key.created_at)
         return date >= start && date <= end
@@ -1375,7 +1427,18 @@ export default function KeyManager() {
       return sortOrder === 'oldest' ? d1 - d2 : d2 - d1
     })
     return result
-  }, [allKeys, selectedAppId, sortOrder, dateRange])
+  }, [allKeys, selectedAppId, sortOrder, dateRange, statusFilter])
+
+  const statusCounts = useMemo(() => {
+    const base = selectedAppId ? allKeys.filter(k => k.app_id === selectedAppId) : allKeys
+    return {
+      ALL: base.length,
+      ACTIVE: base.filter(k => k.status.toUpperCase() === 'ACTIVE').length,
+      EXPIRING_SOON: base.filter(k => k.status.toUpperCase() === 'EXPIRING_SOON').length,
+      EXPIRED: base.filter(k => k.status.toUpperCase() === 'EXPIRED').length,
+      REVOKED: base.filter(k => k.status.toUpperCase() === 'REVOKED').length,
+    }
+  }, [allKeys, selectedAppId])
 
   const copyToClipboard = useCallback((text: string, id: string) => {
     navigator.clipboard.writeText(text)
@@ -1437,6 +1500,32 @@ export default function KeyManager() {
             <option value="">All Applications</option>
             {apps.map((a) => <option key={a.id} value={a.id}>{a.app_name}</option>)}
           </select>
+        </div>
+
+        {/* Status tabs */}
+        <div className="flex items-center gap-1 border-l border-surface-200 pl-4">
+          {([
+            { key: 'ALL',          label: 'All',       color: 'text-surface-600' },
+            { key: 'ACTIVE',       label: 'Active',    color: 'text-emerald-600' },
+            { key: 'EXPIRING_SOON',label: 'Expiring',  color: 'text-amber-600'   },
+            { key: 'EXPIRED',      label: 'Expired',   color: 'text-surface-400' },
+            { key: 'REVOKED',      label: 'Revoked',   color: 'text-red-600'     },
+          ] as const).map(({ key, label, color }) => (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(key)}
+              className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all ${
+                statusFilter === key
+                  ? 'bg-brand-600 text-white shadow-sm'
+                  : `bg-surface-100 ${color} hover:bg-surface-200`
+              }`}
+            >
+              {label}
+              <span className={`ml-1 text-[10px] ${ statusFilter === key ? 'text-white/80' : 'text-surface-400' }`}>
+                {statusCounts[key]}
+              </span>
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-2 border-l border-surface-200 pl-4">

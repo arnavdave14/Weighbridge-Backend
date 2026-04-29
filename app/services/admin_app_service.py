@@ -248,6 +248,21 @@ class AdminAppService:
                         detail=f"An active license already exists for '{key_in.company_name}' for this application."
                     )
 
+                # --- Port Uniqueness Check ---
+                target_port = key_in.port if key_in.port is not None else 7070
+                port_check = await db.execute(
+                    select(ActivationKey).where(
+                        ActivationKey.port == target_port,
+                        ActivationKey.status.in_(["ACTIVE", "EXPIRING_SOON"])
+                    )
+                )
+                conflicting_port_key = port_check.scalars().first()
+                if conflicting_port_key:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Port {target_port} is already in use by company '{conflicting_port_key.company_name}'. Please choose a different port."
+                    )
+
                 db_key = await AdminRepo.create_activation_key(
                     db=db,
                     app_id=key_in.app_id,
@@ -342,6 +357,22 @@ class AdminAppService:
             raise HTTPException(status_code=404, detail="Activation key not found")
 
         update_data = update_in.model_dump(exclude_unset=True)
+
+        if "port" in update_data and update_data["port"] is not None:
+            target_port = update_data["port"]
+            port_check = await db.execute(
+                select(ActivationKey).where(
+                    ActivationKey.port == target_port,
+                    ActivationKey.id != key.id,
+                    ActivationKey.status.in_(["ACTIVE", "EXPIRING_SOON"])
+                )
+            )
+            conflicting_port_key = port_check.scalars().first()
+            if conflicting_port_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Port {target_port} is already in use by company '{conflicting_port_key.company_name}'. Please choose a different port."
+                )
 
         # ── Verification Reset Logic ─────────────────────────────────────────
         # If WhatsApp channel changes, mark it as unverified (stale verification guard)

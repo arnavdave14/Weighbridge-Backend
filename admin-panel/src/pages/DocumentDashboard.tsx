@@ -10,8 +10,13 @@ export default function DocumentDashboard() {
   const [loading, setLoading] = useState(true)
   
   // Filters
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState(() => localStorage.getItem('docDashboardSearch') || '')
+  const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem('docDashboardStatus') || '')
+
+  useEffect(() => {
+    localStorage.setItem('docDashboardSearch', search)
+    localStorage.setItem('docDashboardStatus', statusFilter)
+  }, [search, statusFilter])
   
   // Pagination
   const [page, setPage] = useState(1)

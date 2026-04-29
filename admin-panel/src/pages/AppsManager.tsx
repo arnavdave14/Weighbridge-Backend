@@ -222,8 +222,21 @@ export default function AppsManager() {
   const [loading, setLoading] = useState(true)
   const [showDrawer, setShowDrawer] = useState(false)
   const [editingApp, setEditingApp] = useState<App | null>(null)
-  const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>('latest')
-  const [dateRange, setDateRange] = useState({ start: '', end: '' })
+  const [sortOrder, setSortOrder] = useState<'latest' | 'oldest' | 'custom'>(
+    () => (localStorage.getItem('apps_sortOrder') || 'latest') as 'latest' | 'oldest' | 'custom'
+  )
+  const [dateRange, setDateRange] = useState(() => {
+    try {
+      const saved = localStorage.getItem('apps_dateRange')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {}
+    return { start: '', end: '' }
+  })
+
+  useEffect(() => {
+    localStorage.setItem('apps_sortOrder', sortOrder)
+    localStorage.setItem('apps_dateRange', JSON.stringify(dateRange))
+  }, [sortOrder, dateRange])
 
   const fetchApps = useCallback(async () => {
     try {
