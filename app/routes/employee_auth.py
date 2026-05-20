@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.db_manager import get_db, get_remote_db
+from app.database.db_manager import get_db, get_remote_db, get_primary_db
 from app.core.security import get_password_hash, verify_password
 from app.api.employee_deps import create_employee_token, get_current_employee
 from app.api.admin_deps import get_current_admin
@@ -115,7 +115,7 @@ class EmployeeLoginResponse(BaseModel):
 )
 async def employee_login(
     req: EmployeeLoginRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_remote_db),
 ):
     """
     Authenticate an employee using username OR email + password.
@@ -131,15 +131,19 @@ async def employee_login(
     """
     employee = await EmployeeRepository.get_by_login(db, req.login)
 
-    # Constant-time-equivalent: always run verify_password even on miss
-    # to prevent username enumeration via timing.
-    dummy_hash = "$2b$12$invalidhashfortimingprotectiononly123456789012"
-    password_ok = verify_password(
-        req.password,
-        employee.password_hash if employee else dummy_hash,
-    )
+    # If employee not found, return 401 immediately (no hash to verify)
+    if not employee:
+        logger.warning("[EmployeeAuth] Failed login attempt for login=%r", req.login)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    if not employee or not password_ok:
+    # Verify password against stored hash
+    password_ok = verify_password(req.password, employee.password_hash)
+
+    if not password_ok:
         logger.warning("[EmployeeAuth] Failed login attempt for login=%r", req.login)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -189,7 +193,7 @@ async def employee_me(
 async def employee_register_on_device(
     req: EmployeeRegisterRequest,
     activation_key: ActivationKey = Depends(verify_apex_identity),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_primary_db),
 ):
     """
     Allows a field operator to create their account directly on an activated machine.

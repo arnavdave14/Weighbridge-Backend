@@ -138,8 +138,46 @@ app = FastAPI(
     docs_url=None if settings.ENVIRONMENT == "production" else "/docs",
     redoc_url=None if settings.ENVIRONMENT == "production" else "/redoc",
     openapi_url=None if settings.ENVIRONMENT == "production" else "/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
+    openapi_tags=[
+        {"name": "Employee Auth", "description": "Device-facing endpoints — require `x-local-secret` header (see Authorize button)"},
+        {"name": "Admin — Employees", "description": "Admin Panel employee management — require Admin Bearer token"},
+    ],
 )
+
+# ── Inject x-local-secret into OpenAPI security schemes ─────────────────────
+# This makes the 🔒 Authorize button in Swagger UI show an
+# 'X-Local-Secret' field so you can test device-facing endpoints directly.
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema["components"]["securitySchemes"]["LocalSecret"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-local-secret",
+        "description": "Required for all device-facing endpoints (/employee/*, /receipts/*, etc). Value: `default_local_secret_change_me` in dev."
+    }
+    schema["components"]["securitySchemes"]["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Admin JWT token from POST /admin/auth/login"
+    }
+    # Apply both security schemes globally
+    schema["security"] = [{"LocalSecret": []}, {"BearerAuth": []}]
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
