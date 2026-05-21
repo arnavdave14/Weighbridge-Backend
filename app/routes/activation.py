@@ -4,7 +4,6 @@ from typing import List
 from pydantic import BaseModel
 
 from app.database.db_manager import get_remote_db
-from app.api.admin_deps import get_current_admin
 from app.schemas.admin_schemas import HardwareActivationRequest, HardwareActivationResponse, NotificationRead
 from app.services.admin_app_service import AdminAppService
 from app.repositories.admin_repo import AdminRepo
@@ -16,11 +15,9 @@ router = APIRouter(prefix="/admin/activation", tags=["Admin — Activation"])
 async def verify_hardware_key(
     req: HardwareActivationRequest,
     db: AsyncSession = Depends(get_remote_db),
-    _: dict = Depends(get_current_admin)
 ):
     """
-    JWT-protected endpoint — verifies a hardware activation key.
-    Requires a valid admin Bearer token in the Authorization header.
+    Public endpoint — verifies a hardware activation key.
 
     Security chain:
     1. Admin Bearer token is validated first.

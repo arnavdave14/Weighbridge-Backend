@@ -209,3 +209,37 @@ class ChainCheckpoint(Base):
     previous_checkpoint_hash = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
+class AppData(Base):
+    """
+    Generic document store for the frontend application (e.g., customers, vehicles).
+    Syncs to cloud using the offline-first sync architecture.
+    """
+    __tablename__ = "app_data"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Tenant isolation (company level)
+    key_id = Column(String, nullable=False, index=True)
+    
+    # The collection or category (e.g., "customers", "materials", "settings")
+    collection = Column(String, nullable=False, index=True)
+    
+    # A unique identifier for the document, provided by the frontend (e.g. UUID or 'cust-123')
+    document_id = Column(String, nullable=False, index=True)
+    
+    # The arbitrary JSON data payload
+    payload = Column(JSONB().with_variant(JSON, "sqlite"), nullable=False)
+    
+    # Sync status
+    is_synced = Column(Boolean, default=False, index=True)
+    is_deleted = Column(Boolean, default=False, index=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("key_id", "collection", "document_id", name="uq_app_data_doc"),
+    )
+
+

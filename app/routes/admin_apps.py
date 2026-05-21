@@ -13,8 +13,10 @@ from app.schemas.admin_schemas import (
 from app.services.admin_app_service import AdminAppService
 from app.repositories.admin_repo import AdminRepo
 from app.services.notification_service import NotificationService
-from app.models.admin_models import AdminUser
+from app.models.admin_models import AdminUser, ActivationKey
+from app.models.employee_model import Employee
 from app.core.limiter import limiter
+from sqlalchemy.future import select
 
 router = APIRouter(prefix="/admin/apps", tags=["Admin — Apps"])
 
@@ -164,7 +166,8 @@ async def list_keys_for_app(
     current_admin: AdminUser = Depends(get_current_admin)
 ):
     """List all company licenses (activation keys) for a specific product."""
-    return await AdminRepo.get_keys_for_app(db, app_uuid)
+    keys = await AdminRepo.get_keys_for_app(db, app_uuid)
+    return await _attach_employees_to_keys(db, keys)
 
 
 @router.get("/keys/all", response_model=List[ActivationKeyRead])
@@ -175,7 +178,28 @@ async def list_all_keys(
     offset: int = 0
 ):
     """List all activation keys across all apps with pagination."""
-    return await AdminRepo.get_all_keys(db, limit=limit, offset=offset)
+    keys = await AdminRepo.get_all_keys(db, limit=limit, offset=offset)
+    return await _attach_employees_to_keys(db, keys)
+
+async def _attach_employees_to_keys(db: AsyncSession, keys: List[ActivationKey]) -> List[dict]:
+    if not keys:
+        return []
+    tokens = [k.token for k in keys]
+    emp_result = await db.execute(select(Employee).where(Employee.key_id.in_(tokens)))
+    all_emps = emp_result.scalars().all()
+    
+    emp_map = {t: [] for t in tokens}
+    for e in all_emps:
+        emp_map[e.key_id].append(e)
+    
+    from app.schemas.admin_schemas import EmployeeBasicRead
+    
+    result = []
+    for k in keys:
+        k_dict = ActivationKeyRead.model_validate(k).model_dump()
+        k_dict["employees"] = [EmployeeBasicRead.model_validate(e).model_dump() for e in emp_map[k.token]]
+        result.append(k_dict)
+    return result
 
 
 @router.patch("/keys/{key_uuid}/rotate-token")

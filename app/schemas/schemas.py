@@ -92,3 +92,17 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+# AppData (Generic Document Store) Schemas
+class AppDataWrite(BaseModel):
+    payload: Dict[str, Any] = Field(..., description="Flexible JSON payload")
+
+class AppDataRead(AppDataWrite):
+    id: int
+    collection: str
+    document_id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True

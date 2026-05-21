@@ -279,6 +279,18 @@ class TestConnectionRequest(BaseModel):
     from_name: Optional[str] = None
 
 
+class EmployeeBasicRead(BaseModel):
+    id: str
+    name: str
+    username: str
+    role: str
+    is_active: bool
+    email: Optional[str] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
 class ActivationKeyRead(BaseModel):
     id: UUID4
     app_id: UUID4
@@ -326,6 +338,8 @@ class ActivationKeyRead(BaseModel):
     port: Optional[int] = None
     connection_status: str
     last_heartbeat_at: Optional[datetime] = None
+
+    employees: List[EmployeeBasicRead] = []
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

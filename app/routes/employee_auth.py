@@ -159,8 +159,19 @@ async def employee_login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Check if the activation key they were created under is still valid
+    key = await AdminRepo.get_key_by_token(db, employee.key_id)
+    if not key or key.status not in ["ACTIVE", "EXPIRING_SOON"]:
+        logger.warning("[EmployeeAuth] Activation key invalid or revoked for login=%r", req.login)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     token = create_employee_token(employee)
     logger.info("[EmployeeAuth] Login success: employee=%s key_id=%s", employee.id, employee.key_id)
+    print(f"User {employee.username} successfully logged in with activation key {employee.key_id}")
 
     return EmployeeLoginResponse(
         access_token=token,

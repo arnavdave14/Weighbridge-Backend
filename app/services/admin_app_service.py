@@ -643,6 +643,11 @@ class AdminAppService:
         if matched_key.expiry_date < now:
             raise HTTPException(status_code=403, detail="License has expired")
 
+        # Automatically mark the license as ACTIVE and record the heartbeat
+        matched_key.connection_status = "ACTIVE"
+        matched_key.last_heartbeat_at = now
+        await db.commit()
+
         # GAP-1 FIX: Pre-register Machine in PostgreSQL if machine_id provided.
         # This is a best-effort operation — failure MUST NOT block activation.
         if machine_id:

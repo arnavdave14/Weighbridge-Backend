@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from app.routes import (
     receipts, auth, bhel, sync, admin_apps, activation, notifications,
     admin_auth, admin_branding, admin_dlq, admin_receipts, admin_documents,
-    employee_auth, integrity, settings as settings_router
+    employee_auth, integrity, settings as settings_router, app_data
 )
 from prometheus_fastapi_instrumentator import Instrumentator
 from app.database.sqlite import local_engine
@@ -193,6 +193,7 @@ class LocalAPIAuthMiddleware(BaseHTTPMiddleware):
             "/health", "/metrics", "/static", "/docs", "/redoc", "/openapi.json",
             "/admin",  # Protected by Admin JWT
             "/sync",   # Protected by HMAC
+            "/employee", # No local secret required
         )
         
         path = request.url.path
@@ -247,6 +248,7 @@ app.include_router(admin_documents.router, prefix="/admin")
 
 # Employee Auth (device-facing + admin employee management)
 app.include_router(employee_auth.router)
+app.include_router(app_data.router)
 
 # Integrity Routes
 app.include_router(integrity.router)
